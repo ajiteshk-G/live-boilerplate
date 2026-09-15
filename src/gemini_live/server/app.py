@@ -138,7 +138,18 @@ def create_app(cfg: AppConfig) -> FastAPI:
             return
 
         sink = _WebSocketSink(ws)
-        runner = LiveSessionRunner(cfg, state["client"], tools.registry, sink=sink)
+        # The browser reports navigator.language; open the session in that
+        # language when it is one the Live API supports.
+        session_cfg = cfg.for_client_locale(ws.query_params.get("locale"))
+        if session_cfg is not cfg:
+            log.info(
+                "client locale %r: opening in %s",
+                ws.query_params.get("locale"),
+                session_cfg.speech.language_code,
+            )
+        runner = LiveSessionRunner(
+            session_cfg, state["client"], tools.registry, sink=sink
+        )
         task = asyncio.create_task(runner.run())
 
         async def _relay_client() -> None:

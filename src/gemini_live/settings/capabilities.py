@@ -101,9 +101,14 @@ def filter_for_model(cfg: AppConfig) -> tuple[AppConfig, list[str]]:
         # rule in the system instruction, which is Google's documented
         # workaround for native-audio models.
         if out.speech.enforce_language_in_system_instruction:
+            mode = (
+                "following the user's language"
+                if out.speech.language_mode == "follow_user"
+                else f"enforcing {out.speech.language_code!r}"
+            )
             warnings.append(
                 f"{cfg.model.name} detects language automatically and ignores "
-                f"speech.language_code={out.speech.language_code!r}; enforcing it through "
+                f"speech.language_code={out.speech.language_code!r}; {mode} through "
                 "the system instruction instead."
             )
         else:
@@ -114,5 +119,18 @@ def filter_for_model(cfg: AppConfig) -> tuple[AppConfig, list[str]]:
                 "language is left entirely to the model."
             )
             out.speech.language_code = None
+    elif (
+        caps.supports_language_code
+        and out.speech.language_code
+        and out.speech.language_mode == "follow_user"
+    ):
+        # Here language_code is a fixed synthesis language for the whole
+        # session, so the model cannot follow a user who switches.
+        warnings.append(
+            f"{cfg.model.name} treats speech.language_code="
+            f"{out.speech.language_code!r} as a fixed output language, so "
+            "speech.language_mode='follow_user' can only set the starting language. "
+            "Use a native-audio model for true mid-conversation switching."
+        )
 
     return out, warnings

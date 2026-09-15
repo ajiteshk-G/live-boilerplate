@@ -19,9 +19,16 @@ from ..tools.registry import ToolRegistry
 def build_system_instruction(cfg: AppConfig, policy: DomainPolicy) -> str:
     text = cfg.model.system_instruction.strip()
     # Native-audio models ignore speech.language_code and pick a language
-    # themselves, so the language contract has to live in the prompt.
+    # themselves, so the language contract has to live in the prompt -- both to
+    # pin a language and (in follow_user mode) to license switching.
     if cfg.speech.language_code and cfg.speech.enforce_language_in_system_instruction:
-        text = f"{text}\n{language_directive(cfg.speech.language_code)}"
+        text = (
+            f"{text}\n"
+            + language_directive(
+                cfg.speech.language_code,
+                follow_user=cfg.speech.language_mode == "follow_user",
+            )
+        )
     if cfg.search.inject_domain_rules_into_system_instruction:
         rules = policy.system_instruction_rules()
         if rules:

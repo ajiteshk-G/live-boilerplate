@@ -136,26 +136,39 @@ Set `mode: manual` if you would rather hand-maintain `tools.allow`.
 
 ### Voice and language
 
-These are independent, and conflating them is the usual mistake:
+The agent **speaks the user's language**. It opens in the language the browser
+reports (`navigator.language`), then replies in whatever language the user
+actually speaks, switching mid-conversation as soon as they do.
+
+Two knobs that are easy to confuse:
 
 - **`speech.voice_name`** is a *timbre*. There is no "Indian voice" — all 30
   prebuilt voices speak every supported language.
-- **`speech.language_code`** is what decides the language and the regional
-  accent. **`en-IN`** (Indian English) is what ships selected here; `hi-IN`,
-  `ta-IN`, `bn-IN` and the rest of the Indian locales are listed in the config.
+- **`speech.language_code`** is the language the call *opens* in, and the
+  fallback when the user's language is unclear. **`en-IN`** (Indian English) is
+  what ships selected; every Indian locale and all 70 supported languages are
+  listed in the config.
 
 ```yaml
 speech:
-  voice_name: Kore        # one of 30; 8 of them work on every Live model
-  language_code: en-IN    # <- the Indian accent lives here
+  voice_name: Kore
+  language_mode: follow_user   # or "pinned" to always speak language_code
+  language_code: en-IN         # where the call starts / the fallback
+  use_client_locale: true      # the browser's language wins, per session
   enforce_language_in_system_instruction: true
 ```
 
-The catch: **native-audio models ignore `language_code`** — they detect and
-switch language by themselves. Google's documented workaround is to state the
-language as a rule in the system instruction, and that is what
-`enforce_language_in_system_instruction` does. So on the default model the
-language is pinned by prompt; on half-cascade models the field is sent as well.
+Set `language_mode: pinned` for a single-language agent; then `language_code` is
+a hard requirement rather than a starting point.
+
+> [!IMPORTANT]
+> **Native-audio models ignore `language_code`** — they detect and switch
+> language themselves. Google's documented workaround is to state the rule in
+> the system instruction, which is what
+> `enforce_language_in_system_instruction` does, and in `follow_user` mode it is
+> also what licenses the model to switch. On half-cascade models `language_code`
+> is a *fixed* output language, so they can only set the opening language; true
+> mid-call switching needs a native-audio model (the default here).
 
 ```bash
 uv run glive voices    # all voices + languages, with your selection marked

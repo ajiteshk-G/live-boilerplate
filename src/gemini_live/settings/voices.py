@@ -194,17 +194,45 @@ def language_label(code: str) -> str:
     return f"{name} ({parts[1].upper()})" if len(parts) == 2 else name
 
 
-def language_directive(code: str) -> str:
-    """The system-instruction sentence that pins the spoken language.
+def language_directive(code: str, *, follow_user: bool = False) -> str:
+    """The system-instruction rule that decides what language is spoken.
 
     Native-audio models ignore ``speech.language_code`` and choose a language
-    themselves, so this is the only lever that works on them. The wording
-    follows Google's own recommendation ("RESPOND IN <LANGUAGE>. YOU MUST
-    RESPOND UNMISTAKABLY IN <LANGUAGE>."), plus an accent line, because the
-    language alone does not pin the regional accent.
+    themselves, so this is the only lever that works on them.
+
+    Two modes, because "speak Indian English" and "speak whatever the user
+    speaks" are opposite instructions and cannot share wording:
+
+    * ``follow_user=False`` pins one language. The wording follows Google's own
+      recommendation ("RESPOND IN <LANGUAGE>. YOU MUST RESPOND UNMISTAKABLY IN
+      <LANGUAGE>."), plus an accent line, because naming the language does not
+      pin the regional accent.
+    * ``follow_user=True`` makes ``code`` merely the opening language and the
+      fallback; from then on the model mirrors the user, switching mid-call as
+      soon as they do.
     """
     label = language_label(code)
     region = (code.strip().replace("_", "-").split("-", 1) + [""])[1].upper()
+
+    if follow_user:
+        lines = [
+            f"Open the conversation in {label}.",
+            "SPEAK THE USER'S LANGUAGE: identify the language the user is speaking "
+            "and reply in that same language. If they switch language mid-conversation, "
+            "switch with them immediately and without being asked, and stay in the new "
+            "language until they change again.",
+            "Never ask the user which language they would like; infer it from what they "
+            f"say. If their language is unclear, use {label}.",
+            "Match their script and register too: reply in the script they used, and "
+            "keep mixed-language speech mixed rather than translating it away.",
+        ]
+        if region == "IN":
+            lines.append(
+                f"When speaking {LIVE_LANGUAGES.get(base_language(code), label)}, "
+                "use a natural Indian accent and Indian conversational phrasing."
+            )
+        return "\n".join(lines)
+
     lines = [
         f"RESPOND IN {label.upper()}. YOU MUST RESPOND UNMISTAKABLY IN {label.upper()}.",
         f"Speak only {label} unless the user explicitly asks for another language.",
@@ -215,3 +243,32 @@ def language_directive(code: str) -> str:
             "(Indian names, places, and number formats should sound native)."
         )
     return "\n".join(lines)
+
+
+def resolve_client_locale(raw: str | None) -> str | None:
+    """Normalise a browser ``navigator.language`` value into a usable code.
+
+    Returns None for anything unusable -- missing, malformed, or a language the
+    Live API does not support -- so the caller can fall back to the configured
+    default rather than handing the API something it will reject.
+    """
+    if not raw:
+        return None
+    # navigator.language can arrive as a q-weighted list ("hi-IN,hi;q=0.9").
+    first = raw.split(",")[0].split(";")[0].strip().replace("_", "-")
+    if not first or len(first) > 12:
+        return None
+    parts = first.split("-")
+    if not parts[0].isalpha():
+        return None
+    if not is_supported_language(first):
+        return None
+    language = parts[0].lower()
+    if len(parts) == 1:
+        return language
+    # Keep only the region subtag: "zh-Hans-CN" -> "zh-CN".
+    region = parts[-1]
+    if len(region) == 2 and region.isalpha():
+        return f"{language}-{region.upper()}"
+    return language
+

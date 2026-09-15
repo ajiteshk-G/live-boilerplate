@@ -101,14 +101,31 @@ speech:
   #   uk Ukrainian     ur Urdu          uz Uzbek         vi Vietnamese
   #   zh Chinese       zu Zulu
   #
-  # null = let the model decide.
+  # In follow_user mode (below) this is the language the call OPENS in and the
+  # fallback when the user's language is unclear -- not a hard pin.
+  # null = let the model decide from the first thing it hears.
   language_code: en-IN
+
+  # ---- language_mode -------------------------------------------------------
+  # follow_user  the agent replies in whatever language the user speaks and
+  #              switches mid-conversation as soon as they do. Indian English
+  #              above is just where the call starts.
+  # pinned       always speak language_code, whatever the user does. Use this
+  #              for compliance/brand reasons, or a single-language IVR.
+  language_mode: follow_user
+
+  # Open the call in the BROWSER's language (navigator.language) instead of the
+  # language_code above, when the browser reports one the Live API supports.
+  # This is what makes the app meet each user in their own language from the
+  # very first word, rather than starting in English and switching after they
+  # speak. Falls back to language_code for unsupported or missing locales.
+  use_client_locale: true
 
   # Native-audio models (the default model here) IGNORE language_code: they
   # detect and switch language on their own. Google's documented workaround is
-  # to state the language as a rule in the system instruction, which is what
-  # this does. Turn it off only if you want the model to free-run across
-  # languages.
+  # to state the rule in the system instruction, which is what this does -- and
+  # in follow_user mode it is also what tells the model it MAY switch. Turn it
+  # off only to leave language entirely to the model.
   enforce_language_in_system_instruction: true
 
 

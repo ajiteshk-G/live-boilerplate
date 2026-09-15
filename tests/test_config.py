@@ -296,7 +296,8 @@ def test_language_code_is_untouched_on_models_that_accept_it():
         {
             "vertex": {"project": "p"},
             "model": {"name": "gemini-2.5-flash"},
-            "speech": {"language_code": "hi-IN"},
+            # Pinned: follow_user on this model family raises its own advisory.
+            "speech": {"language_code": "hi-IN", "language_mode": "pinned"},
         }
     )
     filtered, warnings = filter_for_model(cfg)

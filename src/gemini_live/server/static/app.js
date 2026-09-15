@@ -175,7 +175,10 @@ function renderCitations(payload) {
 
 function connect() {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
+  // Tell the server what language this user is in, so the call opens in it
+  // rather than in the server's default.
+  const locale = encodeURIComponent(navigator.language || '');
+  const ws = new WebSocket(`${proto}://${window.location.host}/ws?locale=${locale}`);
   ws.binaryType = 'arraybuffer';
   state.ws = ws;
   state.ended = false;
@@ -210,6 +213,14 @@ function connect() {
       case 'connected':
         setStatus(`Live · ${msg.model}`, 'ok');
         logEvent('session', `${msg.tools.length} tool(s) available`);
+        if (msg.language) {
+          logEvent(
+            'language',
+            msg.language_mode === 'follow_user'
+              ? `starts in ${msg.language}, follows your language`
+              : `pinned to ${msg.language}`
+          );
+        }
         break;
       case 'transcript':
         appendTranscript(msg.role, msg.text);

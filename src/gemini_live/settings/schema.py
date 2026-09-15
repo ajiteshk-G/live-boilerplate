@@ -12,7 +12,12 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .voices import LIVE_VOICES, canonical_voice, is_supported_language
+from .voices import (
+    LIVE_VOICES,
+    canonical_voice,
+    is_supported_language,
+    resolve_client_locale,
+)
 
 
 class _Base(BaseModel):
@@ -66,13 +71,33 @@ class SpeechSection(_Base):
     """
 
     voice_name: str | None = "Kore"
+
+    language_mode: Literal["follow_user", "pinned"] = "follow_user"
+    """Whether the agent adapts to the user's language or stays in one.
+
+    ``follow_user`` -- reply in whatever language the user speaks, switching
+    mid-conversation as they do. ``language_code`` is then only the language the
+    call opens in, and the fallback when the user's language is unclear.
+
+    ``pinned`` -- always speak ``language_code``, whatever the user does.
+    """
+
     language_code: str | None = "en-IN"
 
-    enforce_language_in_system_instruction: bool = True
-    """Also state the language as a rule in the system instruction.
+    use_client_locale: bool = True
+    """Let the browser's locale choose the opening language.
 
-    Required for native-audio models, which ignore ``language_code`` outright
-    and otherwise drift back to US English mid-call.
+    The web client passes ``navigator.language``; if it names a language the
+    Live API supports it replaces ``language_code`` for that session. An
+    unsupported or missing locale falls back to ``language_code``.
+    """
+
+    enforce_language_in_system_instruction: bool = True
+    """Also state the language rule in the system instruction.
+
+    Required for native-audio models, which ignore ``language_code`` outright.
+    With ``language_mode: follow_user`` this is also what licenses the model to
+    switch languages, so turning it off leaves language entirely to the model.
     """
 
     @field_validator("voice_name")
@@ -329,6 +354,23 @@ class AppConfig(_Base):
     def curation_purpose(self) -> str:
         """The text the curator ranks tools against."""
         return self.tools.curation.purpose.strip() or self.model.system_instruction.strip()
+
+    def for_client_locale(self, raw_locale: str | None) -> AppConfig:
+        """A copy of this config that opens in the caller's language.
+
+        Returns ``self`` unchanged when the feature is off, the locale is
+        missing or unsupported, or it already matches. Each connection gets its
+        own copy so one user's language never leaks into another's session.
+        """
+        if not self.speech.use_client_locale:
+            return self
+        resolved = resolve_client_locale(raw_locale)
+        if resolved is None or resolved == self.speech.language_code:
+            return self
+        clone = self.model_copy(deep=True)
+        clone.speech.language_code = resolved
+        return clone
+
 
 
 def normalize_domain(raw: str) -> str:

@@ -183,25 +183,45 @@ def voices_cmd(
             )
         )
 
+    follow_user = cfg.speech.language_mode == "follow_user"
     console.print(
         f"\n[bold]Model:[/bold] {cfg.model.name}   "
         f"[bold]Voice:[/bold] {chosen_voice or '(model default)'}   "
         f"[bold]Language:[/bold] "
         f"{language_label(chosen_lang) if chosen_lang else '(model default)'}"
     )
+    console.print(
+        "[bold]Mode:[/bold] "
+        + (
+            f"follow_user \u2014 opens in "
+            f"{language_label(chosen_lang) if chosen_lang else 'the model default'}, "
+            "then replies in whatever language the user speaks"
+            if follow_user
+            else f"pinned \u2014 always speaks "
+            f"{language_label(chosen_lang) if chosen_lang else 'the model default'}"
+        )
+    )
+    if cfg.speech.use_client_locale:
+        console.print(
+            "[dim]The web client's navigator.language overrides the opening "
+            "language per session (speech.use_client_locale).[/dim]"
+        )
+
     if chosen_lang and not caps.supports_language_code:
         console.print(
             "\n[yellow]This model ignores speech.language_code[/yellow] (native audio "
             "picks the language itself). "
             + (
-                "It is enforced through the system instruction instead:"
+                "The system instruction carries it instead:"
                 if cfg.speech.enforce_language_in_system_instruction
                 else "speech.enforce_language_in_system_instruction is false, so nothing "
-                "pins the language."
+                "steers the language."
             )
         )
         if cfg.speech.enforce_language_in_system_instruction:
-            console.print(f"[dim]{language_directive(chosen_lang)}[/dim]")
+            console.print(
+                f"[dim]{language_directive(chosen_lang, follow_user=follow_user)}[/dim]"
+            )
 
 
 

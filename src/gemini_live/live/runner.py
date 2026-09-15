@@ -192,6 +192,8 @@ class LiveSessionRunner:
                                 "model": self._cfg.model.name,
                                 "tools": self._registry.names,
                                 "resumed": self._resume_handle is not None,
+                                "language": self._cfg.speech.language_code,
+                                "language_mode": self._cfg.speech.language_mode,
                             },
                         )
                         await self._pump(session)
