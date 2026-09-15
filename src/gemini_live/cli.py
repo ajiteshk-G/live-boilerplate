@@ -46,6 +46,32 @@ def _setup_logging(cfg: AppConfig) -> None:
     )
 
 
+def _make_headless(cfg: AppConfig) -> AppConfig:
+    """Configure a config for a text-driven, no-speaker session.
+
+    TEXT is the natural choice, but **native-audio models reject it outright**
+    ("Text output is not supported for native audio output model"), so for those
+    we keep AUDIO and force output transcription on -- the transcript is then the
+    readable reply. Audio bytes are simply discarded by the headless sink.
+    """
+    if "native-audio" in cfg.model.name:
+        cfg.model.response_modalities = ["AUDIO"]
+        cfg.transcription.output = True
+    else:
+        cfg.model.response_modalities = ["TEXT"]
+    return cfg
+
+
+def _reply_text(sink: Any) -> str:
+    """The model's reply, whether it arrived as text parts or as a transcript."""
+    text = "".join(e["text"] for e in sink.of_kind("text"))
+    if text.strip():
+        return text
+    return "".join(
+        e["text"] for e in sink.of_kind("transcript") if e.get("role") == "model"
+    )
+
+
 # --------------------------------------------------------------------------- config
 
 
@@ -193,7 +219,7 @@ def calibrate_usage(
     """
     cfg = _load(config)
     _setup_logging(cfg)
-    cfg.model.response_modalities = ["TEXT"]
+    _make_headless(cfg)
 
     async def run() -> None:
 
@@ -261,7 +287,7 @@ def calibrate_tools(config: str = typer.Option(DEFAULT_CONFIG, "--config", "-c")
     """
     cfg = _load(config)
     _setup_logging(cfg)
-    cfg.model.response_modalities = ["TEXT"]
+    _make_headless(cfg)
 
     async def run() -> None:
         from google.genai import types
@@ -352,7 +378,7 @@ def selftest(
     """Headless TEXT session that exercises the tool loop and token reporting."""
     cfg = _load(config)
     _setup_logging(cfg)
-    cfg.model.response_modalities = ["TEXT"]
+    _make_headless(cfg)
 
     async def run() -> None:
         client = build_client(cfg)
@@ -364,14 +390,37 @@ def selftest(
             await asyncio.sleep(1.5)
             await runner.uplink.text(prompt)
 
+            # A tool-using exchange spans at least two turns: the turn that
+            # emits the function call, then the turn that answers with its
+            # result. Breaking on the first usage_turn would report "(none)".
+            # The reply also arrives token by token, so breaking on the first
+            # non-empty text would print only "Right now,". Wait for the text
+            # to stop growing, and fall back after a grace period in case the
+            # model chose to say nothing at all.
+            grace = 20  # x0.5s, counted down once the first turn lands
+            last_text = ""
+            stable = 0
             for _ in range(120):
                 await asyncio.sleep(0.5)
-                if sink.of_kind("usage_turn"):
-                    break
                 if task.done():
                     # The session died. Waiting out the remaining timeout for a
                     # usage event that can never arrive helps nobody.
                     break
+                if not sink.of_kind("usage_turn"):
+                    continue
+                text = _reply_text(sink).strip()
+                if not text:
+                    grace -= 1
+                    if grace <= 0:
+                        break
+                    continue
+                if text == last_text:
+                    stable += 1
+                    if stable >= 4:  # 2s without a new token: the reply is done
+                        break
+                else:
+                    last_text = text
+                    stable = 0
 
             await runner.close()
             task.cancel()
@@ -387,8 +436,8 @@ def selftest(
                     console.print(f"\n{errors[0]['hint']}")
                 raise typer.Exit(code=1)
 
-            text = "".join(e["text"] for e in sink.of_kind("text"))
-            console.print(f"\n[bold]Response:[/bold] {text or '(none)'}")
+            text = _reply_text(sink)
+            console.print(f"\n[bold]Response:[/bold] {text.strip() or '(none)'}")
             for call in sink.of_kind("tool_call"):
                 console.print(f"[bold]Tool called:[/bold] {', '.join(call['names'])}")
             for usage in sink.of_kind("usage_turn"):

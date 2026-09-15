@@ -22,6 +22,9 @@ from gemini_live.live.runner import is_permanent_error
         "404 Publisher Model was not found",
         "FAILED_PRECONDITION: billing is not enabled",
         "Quota exceeded for this project",
+        # Observed for real: a native-audio model rejecting TEXT output. The
+        # config is wrong for that model and no amount of retrying fixes it.
+        "1007 None. Text output is not supported for native audio output model.",
     ],
 )
 def test_permanent_failures_are_recognised(message):

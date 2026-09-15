@@ -167,8 +167,9 @@ tools:
     embedding_dimensions: 768
 
     # A cheap non-Live model used only to MEASURE declaration token cost via
-    # count_tokens. Never used for conversation.
-    cost_model: gemini-2.0-flash-001
+    # count_tokens. Never used for conversation. Must exist in vertex.location
+    # -- check with: gcloud ai models list --region=<location>
+    cost_model: gemini-2.5-flash
 
   # Glob patterns over exposed names (`<server>__<tool>`).
   pinned: [] # always included, exempt from scoring - e.g. ["*__search_docs"]

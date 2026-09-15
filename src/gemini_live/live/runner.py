@@ -37,6 +37,10 @@ _PERMANENT_MARKERS = (
     "is disabled",
     "was not found",
     "not found for api version",
+    # Capability mismatches: e.g. "Text output is not supported for native audio
+    # output model". The config is wrong for this model and always will be.
+    "is not supported",
+    "not supported for",
     "billing",
     "quota exceeded",
     "403",
@@ -221,34 +225,53 @@ class LiveSessionRunner:
     # -------------------------------------------------------------- downlink
 
     async def _pump_downlink(self, session: Any) -> None:
-        async for message in session.receive():
-            # usage_metadata can ride on ANY server message.
-            if getattr(message, "usage_metadata", None) is not None:
-                self._accountant.observe(message.usage_metadata)
+        # `session.receive()` is a PER-TURN iterator, not a session-lifetime one:
+        # the SDK breaks out of the generator as soon as a turn completes (see
+        # google/genai/live.py, `_is_interaction_complete`). Letting this method
+        # return at that point would look like a dropped connection to `run()`,
+        # which would reconnect and discard the whole conversation after every
+        # single turn -- and would swallow the model's answer to a tool call,
+        # since that answer arrives in the turn AFTER the function call.
+        # So we re-enter the iterator for each turn and let a genuinely closed
+        # websocket surface as an exception instead.
+        while not self._closed:
+            turn_messages = 0
+            async for message in session.receive():
+                turn_messages += 1
+                await self._handle_message(message)
+            if turn_messages == 0:
+                # The generator ended without yielding anything, which means the
+                # stream is finished rather than the turn. Stop, don't hot-loop.
+                return
 
-            content = getattr(message, "server_content", None)
-            if content is not None:
-                await self._handle_server_content(content)
+    async def _handle_message(self, message: Any) -> None:
+        # usage_metadata can ride on ANY server message.
+        if getattr(message, "usage_metadata", None) is not None:
+            self._accountant.observe(message.usage_metadata)
 
-            tool_call = getattr(message, "tool_call", None)
-            if tool_call is not None:
-                await self._handle_tool_call(tool_call)
+        content = getattr(message, "server_content", None)
+        if content is not None:
+            await self._handle_server_content(content)
 
-            cancellation = getattr(message, "tool_call_cancellation", None)
-            if cancellation is not None:
-                ids = list(getattr(cancellation, "ids", None) or [])
-                self._pending_tools.difference_update(ids)
-                await self._sink.event("tool_cancelled", {"ids": ids})
+        tool_call = getattr(message, "tool_call", None)
+        if tool_call is not None:
+            await self._handle_tool_call(tool_call)
 
-            update = getattr(message, "session_resumption_update", None)
-            if update is not None and getattr(update, "resumable", False):
-                self._resume_handle = getattr(update, "new_handle", None)
+        cancellation = getattr(message, "tool_call_cancellation", None)
+        if cancellation is not None:
+            ids = list(getattr(cancellation, "ids", None) or [])
+            self._pending_tools.difference_update(ids)
+            await self._sink.event("tool_cancelled", {"ids": ids})
 
-            go_away = getattr(message, "go_away", None)
-            if go_away is not None:
-                await self._sink.event(
-                    "go_away", {"time_left": str(getattr(go_away, "time_left", ""))}
-                )
+        update = getattr(message, "session_resumption_update", None)
+        if update is not None and getattr(update, "resumable", False):
+            self._resume_handle = getattr(update, "new_handle", None)
+
+        go_away = getattr(message, "go_away", None)
+        if go_away is not None:
+            await self._sink.event(
+                "go_away", {"time_left": str(getattr(go_away, "time_left", ""))}
+            )
 
     async def _handle_server_content(self, content: Any) -> None:
         # A single event can carry multiple parts (audio AND transcript), so we

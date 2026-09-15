@@ -403,3 +403,97 @@ async def test_uplink_audio_reaches_the_session():
     # Best-effort: the uplink pump is cancelled as soon as the downlink ends,
     # so only assert that nothing raised and the queue was drained or cancelled.
     assert session.realtime_inputs == [] or "audio" in session.realtime_inputs[0]
+
+
+# ------------------------------------------- per-turn receive() iterator
+
+
+class TurnScriptedSession:
+    """Mimics the real SDK, where ``receive()`` ends when a turn completes.
+
+    ``google.genai`` breaks out of the ``receive()`` generator on
+    ``turn_complete`` (live.py, ``_is_interaction_complete``), so a session that
+    spans several turns hands back a *fresh* iterator per turn over the same
+    open websocket. ``FakeSession`` yields everything in one go and therefore
+    cannot catch a runner that stops after the first turn.
+    """
+
+    def __init__(self, turns: list[list[Msg]]) -> None:
+        self._turns = list(turns)
+        self.receive_calls = 0
+        self.realtime_inputs: list[dict[str, Any]] = []
+        self.tool_responses: list[Any] = []
+        self.on_exhausted = None
+
+    async def receive(self):
+        self.receive_calls += 1
+        if not self._turns:
+            if self.on_exhausted is not None:
+                await self.on_exhausted()
+            return
+        for msg in self._turns.pop(0):
+            yield msg
+
+    async def send_realtime_input(self, **kwargs: Any) -> None:
+        self.realtime_inputs.append(kwargs)
+
+    async def send_tool_response(self, *, function_responses: list[Any]) -> None:
+        self.tool_responses.extend(function_responses)
+
+
+async def test_answer_after_tool_call_is_not_lost_to_a_reconnect():
+    """The regression: receive() ends on the function-call turn, and the
+    model's actual answer only arrives in the turn after it."""
+    called: list[str] = []
+
+    def now(args: dict[str, Any]) -> str:
+        called.append("now")
+        return "12:00"
+
+    turns = [
+        # Turn 0: the model asks for the tool, then completes the turn.
+        [
+            Msg(tool_call=SimpleNamespace(function_calls=[FnCall(name="now")])),
+            Msg(
+                usage_metadata=FakeUsage(prompt_token_count=57, total_token_count=62),
+                server_content=ServerContent(turn_complete=True),
+            ),
+        ],
+        # Turn 1: the answer that uses the tool result.
+        [
+            Msg(
+                server_content=ServerContent(
+                    model_turn=ModelTurn(parts=[Part(text="It is 12:00.")])
+                )
+            ),
+            Msg(
+                usage_metadata=FakeUsage(prompt_token_count=80, total_token_count=95),
+                server_content=ServerContent(turn_complete=True),
+            ),
+        ],
+    ]
+
+    cfg = AppConfig.model_validate(
+        {
+            "vertex": {"project": "p"},
+            "usage": {"log_path": None, "log_raw_snapshots": False},
+            "search": {"google_search": {"enabled": False}, "log_violations": None},
+        }
+    )
+    session = TurnScriptedSession(turns)
+    client = FakeClient(session)  # exactly one session: a reconnect would IndexError
+    sink = CollectingSink()
+    runner = LiveSessionRunner(cfg, client, ToolRegistry([tool("now", now)]), sink=sink)
+    session.on_exhausted = runner.close
+
+    await runner.run()
+
+    assert called == ["now"]
+    assert session.receive_calls >= 2, "runner gave up after the first turn"
+    texts = "".join(e["text"] for e in sink.of_kind("text"))
+    assert texts == "It is 12:00."
+    # One connect only. A second 'connected' event means the session was torn
+    # down and the conversation history thrown away.
+    assert len(sink.of_kind("connected")) == 1
+    assert sink.of_kind("reconnecting") == []
+    assert len(sink.of_kind("usage_turn")) == 2

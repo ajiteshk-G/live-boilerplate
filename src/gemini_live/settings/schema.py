@@ -180,7 +180,7 @@ class CurationSection(_Base):
     max_desc_chars: int = 200
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
-    cost_model: str = "gemini-2.0-flash-001"
+    cost_model: str = "gemini-2.5-flash"
     """Non-Live model used purely to measure declaration token cost via count_tokens."""
 
     @field_validator("max_tools")
