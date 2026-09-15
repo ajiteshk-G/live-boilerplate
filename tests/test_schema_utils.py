@@ -182,3 +182,51 @@ def test_embedding_text_includes_name_description_and_parameters(make_candidate)
 def test_embedding_text_without_parameters(make_candidate):
     cand = make_candidate("t__now", description="Current time")
     assert cand.embedding_text == "t__now: Current time"
+
+
+def test_properties_named_title_or_default_are_preserved():
+    """A tool parameter named 'title' or 'default' inside properties must not be deleted."""
+    schema = {
+        "type": "object",
+        "title": "CreateDocArgs",
+        "properties": {
+            "title": {"type": "string", "title": "Doc Title", "default": "Untitled"},
+            "default": {"type": "boolean", "default": False},
+        },
+        "required": ["title", "default"],
+    }
+    cleaned = sanitize_json_schema(schema)
+
+    assert "title" not in cleaned  # top-level schema title stripped
+    assert "title" in cleaned["properties"]
+    assert "default" in cleaned["properties"]
+    assert cleaned["properties"]["title"] == {"type": "string"}
+    assert cleaned["properties"]["default"] == {"type": "boolean"}
+    assert cleaned["required"] == ["title", "default"]
+
+
+def test_refs_and_defs_are_inlined_before_defs_stripped():
+    """Pydantic/FastMCP schemas use $defs + $ref; stripping without inlining leaves empty {}."""
+    schema = {
+        "type": "object",
+        "$defs": {
+            "FilterSpec": {
+                "type": "object",
+                "title": "FilterSpec",
+                "properties": {"field": {"type": "string"}, "op": {"type": "string"}},
+                "required": ["field"],
+            }
+        },
+        "properties": {
+            "filter": {"$ref": "#/$defs/FilterSpec", "description": "Filter criteria"}
+        },
+    }
+    cleaned = sanitize_json_schema(schema)
+
+    assert "$defs" not in cleaned
+    assert "$ref" not in cleaned["properties"]["filter"]
+    assert cleaned["properties"]["filter"]["type"] == "object"
+    assert cleaned["properties"]["filter"]["description"] == "Filter criteria"
+    assert "field" in cleaned["properties"]["filter"]["properties"]
+    assert cleaned["properties"]["filter"]["required"] == ["field"]
+

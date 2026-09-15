@@ -52,7 +52,7 @@ function setStatus(text, cls) {
 function appendTranscript(role, text) {
   const list = el('transcript');
   const key = role === 'user' ? 'lastUser' : 'lastModel';
-  // The API streams transcripts in fragments; append to the open bubble.
+  // The API streams transcripts in fragments; append to the open bubble for this role.
   if (state[key] && state[key].dataset.role === role) {
     state[key].querySelector('.bubble-text').textContent += text;
   } else {
@@ -64,7 +64,6 @@ function appendTranscript(role, text) {
     item.querySelector('.bubble-text').textContent = text;
     list.appendChild(item);
     state[key] = item;
-    state[role === 'user' ? 'lastModel' : 'lastUser'] = null;
   }
   list.scrollTop = list.scrollHeight;
 }
@@ -213,6 +212,8 @@ function connect() {
         break;
       case 'usage_turn':
         renderTurn(msg);
+        state.lastUser = null;
+        state.lastModel = null;
         break;
       case 'usage_session':
         renderSession(msg);
@@ -236,7 +237,15 @@ function connect() {
 // -------------------------------------------------------------------- audio
 
 function playPcm(buffer) {
-  if (!state.playerNode) return;
+  if (!state.playerNode) {
+    initPlayback().then(() => {
+      if (state.playCtx && state.playCtx.state === 'suspended') {
+        state.playCtx.resume();
+      }
+      if (state.playerNode) playPcm(buffer);
+    });
+    return;
+  }
   const pcm = new Int16Array(buffer);
   const floats = new Float32Array(pcm.length);
   for (let i = 0; i < pcm.length; i++) floats[i] = pcm[i] / 32768;
@@ -300,12 +309,18 @@ el('mic-btn').addEventListener('click', async () => {
   }
 });
 
-el('text-form').addEventListener('submit', (e) => {
+el('text-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const input = el('text-input');
   const text = input.value.trim();
   if (!text || !state.ws) return;
+  try {
+    await initPlayback();
+    if (state.playCtx) await state.playCtx.resume();
+  } catch (_) {}
   state.ws.send(JSON.stringify({ type: 'text', text }));
+  state.lastUser = null;
+  state.lastModel = null;
   appendTranscript('user', text);
   state.lastUser = null;
   input.value = '';

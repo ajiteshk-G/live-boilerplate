@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..search.domain_policy import DomainPolicy
-from ..settings.schema import AppConfig
+from ..settings.schema import AppConfig, normalize_domain
 from ..tools.registry import ToolRegistry
 
 
@@ -120,9 +120,19 @@ def build_live_config(
     tools: list[Any] = list(registry.declarations()) if registry else []
     if cfg.search.google_search.enabled:
         search_kwargs: dict[str, Any] = {}
-        if cfg.search.google_search.exclude_domains:
+        excluded = list(
+            dict.fromkeys(
+                normalize_domain(d)
+                for d in (
+                    *(cfg.search.google_search.exclude_domains or []),
+                    *(cfg.search.domains.deny or []),
+                )
+                if d
+            )
+        )
+        if excluded:
             # Real server-side deny-list. Vertex-only; the Developer API rejects it.
-            search_kwargs["exclude_domains"] = cfg.search.google_search.exclude_domains
+            search_kwargs["exclude_domains"] = excluded
         tools.append(types.Tool(google_search=types.GoogleSearch(**search_kwargs)))
     if tools:
         kwargs["tools"] = tools

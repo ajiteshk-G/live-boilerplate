@@ -42,7 +42,7 @@ def test_selection_stops_at_max_tools(make_candidate):
 
     assert len(selection.selected) == 3
     assert len(selection.dropped) == 7
-    assert all("max_tools" in c.drop_reason for c in selection.dropped)
+    assert all("max_tools" in (c.drop_reason or "") for c in selection.dropped)
 
 
 def test_selection_stops_at_the_token_budget(make_candidate):
@@ -53,7 +53,7 @@ def test_selection_stops_at_the_token_budget(make_candidate):
 
     assert selection.total_tokens <= 250
     assert len(selection.selected) == 2
-    assert any("budget exhausted" in c.drop_reason for c in selection.dropped)
+    assert any("budget exhausted" in (c.drop_reason or "") for c in selection.dropped)
 
 
 def test_saved_tokens_reports_what_curation_avoided(make_candidate):
@@ -154,7 +154,7 @@ def test_tools_below_min_score_are_dropped(make_candidate):
     selection = curator.select(catalog, purpose="find docs")
 
     assert [c.exposed_name for c in selection.selected] == ["docs__search"]
-    assert "min_score" in selection.dropped[0].drop_reason
+    assert "min_score" in (selection.dropped[0].drop_reason or "")
 
 
 def test_near_duplicate_tools_are_dropped(make_candidate):
@@ -172,7 +172,7 @@ def test_near_duplicate_tools_are_dropped(make_candidate):
     selection = curator.select(catalog, purpose="search")
 
     assert len(selection.selected) == 1
-    assert "near-duplicate" in selection.dropped[0].drop_reason
+    assert "near-duplicate" in (selection.dropped[0].drop_reason or "")
 
 
 def test_embedding_failure_degrades_to_budget_only_curation(make_candidate):
@@ -244,3 +244,52 @@ def test_empty_catalog_is_handled(make_candidate):
 def test_max_tools_is_clamped_to_the_api_limit():
     """The API rejects more than 128 declarations outright."""
     assert ToolCurator(max_tools=500).max_tools == 128
+
+
+def test_manual_mode_retains_pinned_tools(make_candidate):
+    """Built-in tools in tools.pinned must survive manual mode even if not in tools.allow."""
+    curator = ToolCurator(
+        mode="manual",
+        allow=["docs__*"],
+        pinned=["get_current_time"],
+        max_tools=100,
+    )
+    catalog = [
+        make_candidate("docs__search"),
+        make_candidate("get_current_time"),
+        make_candidate("other__tool"),
+    ]
+    selection = curator.select(catalog, purpose="")
+    names = sorted(c.exposed_name for c in selection.selected)
+    assert names == ["docs__search", "get_current_time"]
+
+
+def test_offline_cost_measurement_does_not_poison_disk_cache(tmp_path):
+    """Running offline must return the heuristic without writing to tool_costs.json."""
+    from gemini_live.tools.cost import DeclarationCostMeter
+
+    cache_file = tmp_path / "tool_costs.json"
+    meter = DeclarationCostMeter(
+        client=None, model="gemini-2.5-flash", cache_path=cache_file, enabled=False
+    )
+    est = meter.measure("docs__search", "Search docs", {"type": "object", "properties": {}})
+    assert est > 0
+    assert not cache_file.exists()
+
+
+async def test_builtin_get_current_time_honors_timezone():
+    from gemini_live.settings.schema import BuiltinToolConfig, ToolsSection
+    from gemini_live.tools.builtins import build_builtin_candidates
+
+    tools = build_builtin_candidates(
+        ToolsSection(builtins={"get_current_time": BuiltinToolConfig(enabled=True)})
+    )
+    time_tool = next(t for t in tools if t.exposed_name == "get_current_time")
+
+    res_kolkata = await time_tool.invoke({"timezone": "Asia/Kolkata"})
+    assert res_kolkata["timezone"] == "Asia/Kolkata"
+    assert "+05:30" in res_kolkata["iso8601"]
+
+    res_invalid = await time_tool.invoke({"timezone": "Invalid/NoSuchZone"})
+    assert res_invalid["timezone"] == "UTC"
+

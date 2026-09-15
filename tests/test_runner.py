@@ -76,7 +76,7 @@ class FakeSession:
         self._messages = messages
         self.realtime_inputs: list[dict[str, Any]] = []
         self.tool_responses: list[Any] = []
-        self.on_exhausted = None
+        self.on_exhausted: Any = None
 
     async def receive(self):
         for msg in self._messages:
@@ -94,7 +94,7 @@ class FakeSession:
 class FakeClient:
     """Mimics ``client.aio.live.connect(...)`` as an async context manager."""
 
-    def __init__(self, *sessions: FakeSession) -> None:
+    def __init__(self, *sessions: Any) -> None:
         self.sessions = list(sessions)
         self.configs: list[Any] = []
         outer = self
@@ -423,7 +423,7 @@ class TurnScriptedSession:
         self.receive_calls = 0
         self.realtime_inputs: list[dict[str, Any]] = []
         self.tool_responses: list[Any] = []
-        self.on_exhausted = None
+        self.on_exhausted: Any = None
 
     async def receive(self):
         self.receive_calls += 1
@@ -497,3 +497,74 @@ async def test_answer_after_tool_call_is_not_lost_to_a_reconnect():
     assert len(sink.of_kind("connected")) == 1
     assert sink.of_kind("reconnecting") == []
     assert len(sink.of_kind("usage_turn")) == 2
+
+
+async def test_interrupted_turn_commits_inflight_usage_and_preserves_monotonicity():
+    """When the user barges in (interrupted=True), the runner must finalize the
+    interrupted turn so its usage is committed and does not leak into the next turn."""
+    runner, sink, _ = make_runner(
+        [
+            # Turn 0 starts generating, reaches 100 prompt / 40 response tokens,
+            # then user interrupts
+            Msg(
+                usage_metadata=FakeUsage(
+                    prompt_token_count=100, response_token_count=40, total_token_count=140
+                ),
+                server_content=ServerContent(interrupted=True),
+            ),
+            # Turn 1 starts fresh with 110 prompt / 10 response tokens
+            # (lower response count than 40!)
+            Msg(
+                usage_metadata=FakeUsage(
+                    prompt_token_count=110, response_token_count=10, total_token_count=120
+                ),
+                server_content=ServerContent(turn_complete=True),
+            ),
+        ]
+    )
+    await runner.run()
+
+    assert len(sink.of_kind("interrupted")) == 1
+    assert len(sink.of_kind("usage_turn")) == 2
+    assert runner.accountant.session_total().turns == 2
+    # Response tokens: turn 0 (40) + turn 1 (10) = 50
+    assert runner.accountant.session_total().response_tokens == 50
+
+
+async def test_setup_failure_stops_after_max_retries_instead_of_looping_forever(monkeypatch):
+    """If connect() enters but receive() raises before yielding any message,
+    attempts must NOT be reset to 0 on every attempt."""
+    import asyncio
+
+    import pytest
+
+    async def fast_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    class FailingSession:
+        async def receive(self):
+            if False:
+                yield None
+            raise RuntimeError("1011 transient server hiccup before first message")
+
+    cfg = AppConfig.model_validate(
+        {
+            "vertex": {"project": "p"},
+            "session": {"resumption": {"enabled": True}},
+            "usage": {"log_path": None, "log_raw_snapshots": False},
+            "search": {"google_search": {"enabled": False}, "log_violations": None},
+        }
+    )
+    client = FakeClient(FailingSession(), FailingSession(), FailingSession(), FailingSession())
+    sink = CollectingSink()
+    runner = LiveSessionRunner(cfg, client, ToolRegistry([]), sink=sink)
+
+    with pytest.raises(RuntimeError, match="1011 transient"):
+        await runner.run()
+
+    # Should attempt 1 initial + 3 retries = 4 connects, then raise
+    assert len(sink.of_kind("connected")) == 4
+    assert len(sink.of_kind("reconnecting")) == 3
+

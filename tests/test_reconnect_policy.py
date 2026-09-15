@@ -50,3 +50,39 @@ def test_transient_failures_are_still_retried(message):
 
 def test_matching_is_case_insensitive():
     assert is_permanent_error(RuntimeError("Permission_Denied")) is True
+
+
+def test_exception_group_is_unwrapped():
+    """TaskGroup wraps downlink errors in ExceptionGroup; permanent sub-exceptions
+    must be caught."""
+    group = ExceptionGroup(
+        "unhandled errors in a taskgroup (1 sub-exception)",
+        [RuntimeError("400 Invalid argument: bad setup")],
+    )
+    assert is_permanent_error(group) is True
+
+    transient_group = ExceptionGroup(
+        "unhandled errors in a taskgroup (1 sub-exception)",
+        [RuntimeError("1011 internal error")],
+    )
+    assert is_permanent_error(transient_group) is False
+
+
+async def test_uplink_drain_audio_removes_only_audio():
+    import asyncio
+
+    from gemini_live.live.runner import _Uplink
+
+    up = _Uplink(asyncio.Queue())
+    await up.audio(b"chunk1")
+    await up.text("hello")
+    await up.audio(b"chunk2")
+    await up.mic_off()
+
+    dropped = up.drain_audio()
+    assert dropped == 2
+    remaining = []
+    while not up.queue.empty():
+        remaining.append(up.queue.get_nowait()["kind"])
+    assert remaining == ["text", "audio_stream_end"]
+

@@ -76,6 +76,8 @@ class DomainPolicy:
 
     def verdict(self, url_or_domain: str | None, *, fallback: str | None = None) -> DomainDecision:
         host = self.extract_host(url_or_domain) or self.extract_host(fallback)
+        if not self.active:
+            return DomainDecision(Verdict.ALLOWED, host, "no allow-list or deny-list configured")
         if host is None:
             return DomainDecision(
                 Verdict.UNKNOWN,

@@ -145,7 +145,14 @@ def test_clean_audits_write_nothing(tmp_path):
 def test_unconfigured_policy_allows_everything():
     grounding = FakeGrounding(
         grounding_chunks=[
-            FakeChunk(FakeWeb(uri="https://anything.example", domain="anything.example"))
+            FakeChunk(FakeWeb(uri="https://anything.example", domain="anything.example")),
+            FakeChunk(
+                FakeWeb(uri="https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC")
+            ),
         ]
     )
-    assert GroundingFilter(DomainPolicy()).audit(grounding).clean
+    audit = GroundingFilter(DomainPolicy()).audit(grounding)
+    assert audit.clean
+    assert audit.unknowns == []
+    assert audit.violations == []
+

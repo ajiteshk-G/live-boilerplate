@@ -8,13 +8,14 @@ down the whole voice application.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 from contextlib import AsyncExitStack
 from typing import Any
 
 from ..settings.schema import McpServerConfig
-from .catalog import ToolCandidate
+from .catalog import ToolCandidate, ToolInvoker
 
 log = logging.getLogger(__name__)
 
@@ -116,9 +117,25 @@ class McpToolsetManager:
                     "`streamablehttp_client` (mcp 1.x)."
                 )
 
-            streams = await self._stack.enter_async_context(
-                http_client(server.url or "", headers=server.headers or None)
-            )
+            sig = inspect.signature(http_client).parameters
+            if "http_client" in sig:
+                if server.headers:
+                    import httpx
+
+                    client = await self._stack.enter_async_context(
+                        httpx.AsyncClient(headers=server.headers)
+                    )
+                    streams = await self._stack.enter_async_context(
+                        http_client(server.url or "", http_client=client)
+                    )
+                else:
+                    streams = await self._stack.enter_async_context(
+                        http_client(server.url or "")
+                    )
+            else:
+                streams = await self._stack.enter_async_context(
+                    http_client(server.url or "", headers=server.headers or None)
+                )
         elif server.transport == "sse":
             from mcp.client.sse import sse_client
 
@@ -161,7 +178,7 @@ class McpToolsetManager:
             raw_name=tool.name,
         )
 
-    def _make_invoker(self, server_name: str, tool_name: str):
+    def _make_invoker(self, server_name: str, tool_name: str) -> ToolInvoker:
         async def invoke(args: dict[str, Any]) -> dict[str, Any]:
             session = self._sessions.get(server_name)
             if session is None:

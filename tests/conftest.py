@@ -22,7 +22,7 @@ class FakeModality:
     contain entries like that, and the accountant must not drop or crash on them.
     """
 
-    modality: str | None
+    modality: Any
     token_count: int
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -66,11 +67,15 @@ class ToolPipeline:
             curation.cost_model,
             enabled=self._client is not None,
         )
-        for cand in catalog:
-            cand.token_cost = meter.measure(
-                cand.exposed_name, cand.description, cand.input_schema
-            )
-        meter.flush()
+
+        def _measure_all() -> None:
+            for cand in catalog:
+                cand.token_cost = meter.measure(
+                    cand.exposed_name, cand.description, cand.input_schema
+                )
+            meter.flush()
+
+        await asyncio.to_thread(_measure_all)
 
         # 4. Select -----------------------------------------------------------
         embedder = (
@@ -89,7 +94,7 @@ class ToolPipeline:
             allow=cfg.tools.allow,
             embedder=embedder,
         )
-        selection = curator.select(catalog, cfg.curation_purpose())
+        selection = await asyncio.to_thread(curator.select, catalog, cfg.curation_purpose())
 
         log.info(
             "tools: %d/%d selected, %d tokens per turn (catalog would cost %d)",

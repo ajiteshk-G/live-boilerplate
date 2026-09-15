@@ -14,6 +14,7 @@ from ..settings.schema import AppConfig
 from ..tools.registry import ToolRegistry
 from ..usage.accountant import TokenAccountant
 from ..usage.cost_model import CostModel
+from ..usage.pricing import PriceTable
 from .connect_config import build_live_config
 from .events import EventSink, NullSink
 
@@ -31,6 +32,7 @@ _PERMANENT_MARKERS = (
     "permission_denied",
     "unauthenticated",
     "invalid_argument",
+    "invalid argument",
     "failed_precondition",
     "has not been used in project",
     "api has not been used",
@@ -61,11 +63,17 @@ PERMANENT_HINT = (
 def is_permanent_error(exc: BaseException) -> bool:
     """Whether reconnecting could plausibly help.
 
-    Config and credential failures surface as a WebSocket close rather than a
-    clean exception type, so this has to inspect the message text.
+    Config and credential failures surface as a WebSocket close or inside an
+    ExceptionGroup from TaskGroup, so we unwrap groups and causes recursively.
     """
+    if isinstance(exc, BaseExceptionGroup):
+        return any(is_permanent_error(sub) for sub in exc.exceptions)
     text = str(exc).lower()
-    return any(marker in text for marker in _PERMANENT_MARKERS)
+    if any(marker in text for marker in _PERMANENT_MARKERS):
+        return True
+    if exc.__cause__ is not None and is_permanent_error(exc.__cause__):
+        return True
+    return exc.__context__ is not None and is_permanent_error(exc.__context__)
 
 
 @dataclass
@@ -85,6 +93,21 @@ class _Uplink:
 
     async def close(self) -> None:
         await self.queue.put({"kind": "close"})
+
+    def drain_audio(self) -> int:
+        """Remove queued audio frames so stale mic chunks don't flood a resumed session."""
+        kept: list[dict[str, Any]] = []
+        dropped = 0
+        while not self.queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                item = self.queue.get_nowait()
+                if item.get("kind") == "audio":
+                    dropped += 1
+                else:
+                    kept.append(item)
+        for item in kept:
+            self.queue.put_nowait(item)
+        return dropped
 
 
 class LiveSessionRunner:
@@ -115,17 +138,33 @@ class LiveSessionRunner:
             raw_log_path=cfg.usage.log_path,
             log_raw_snapshots=cfg.usage.log_raw_snapshots,
         )
+        prices = (
+            PriceTable(
+                text_input_per_1k=cfg.usage.pricing.text_input_per_1k,
+                audio_input_per_1k=cfg.usage.pricing.audio_input_per_1k,
+                text_output_per_1k=cfg.usage.pricing.text_output_per_1k,
+                audio_output_per_1k=cfg.usage.pricing.audio_output_per_1k,
+                thinking_per_1k=cfg.usage.pricing.thinking_per_1k,
+                currency=cfg.usage.pricing.currency,
+            )
+            if cfg.usage.pricing is not None
+            else None
+        )
         self._cost = cost_model or CostModel(
+            tool_declaration_tokens=registry.total_declaration_tokens,
             warn_prompt_tokens_per_turn=cfg.usage.alerts.warn_prompt_tokens_per_turn,
             warn_rent_ratio=cfg.usage.alerts.warn_rent_ratio,
             warn_session_total=cfg.usage.alerts.warn_session_total,
+            prices=prices,
         )
 
         self.uplink = _Uplink(asyncio.Queue())
         self._session: Any | None = None
         self._resume_handle: str | None = None
         self._closed = False
+        self._received_any = False
         self._pending_tools: set[str] = set()
+        self._tool_tasks: dict[str, asyncio.Task[Any]] = {}
 
     # ------------------------------------------------------------------- run
 
@@ -133,72 +172,88 @@ class LiveSessionRunner:
         """Connect and pump until closed. Reconnects transparently when the
         server sends GoAway and session resumption is enabled."""
         attempts = 0
-        while not self._closed:
-            config = build_live_config(
-                self._cfg,
-                self._registry,
-                policy=self._policy,
-                resumption_handle=self._resume_handle,
-            )
-            try:
-                async with self._client.aio.live.connect(
-                    model=self._cfg.model.name, config=config
-                ) as session:
-                    self._session = session
-                    attempts = 0
-                    await self._sink.event(
-                        "connected",
-                        {
-                            "model": self._cfg.model.name,
-                            "tools": self._registry.names,
-                            "resumed": self._resume_handle is not None,
-                        },
-                    )
-                    await self._pump(session)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if self._closed:
-                    break
-                if is_permanent_error(exc):
-                    # Retrying cannot help, and backing off three times just
-                    # buries the one message that tells the user what to fix.
-                    log.error("live session failed permanently: %s", exc)
-                    await self._sink.event(
-                        "error",
-                        {
-                            "message": f"{type(exc).__name__}: {exc}",
-                            "permanent": True,
-                            "hint": PERMANENT_HINT,
-                        },
-                    )
+        try:
+            while not self._closed:
+                self._received_any = False
+                config = build_live_config(
+                    self._cfg,
+                    self._registry,
+                    policy=self._policy,
+                    resumption_handle=self._resume_handle,
+                )
+                try:
+                    async with self._client.aio.live.connect(
+                        model=self._cfg.model.name, config=config
+                    ) as session:
+                        self._session = session
+                        await self._sink.event(
+                            "connected",
+                            {
+                                "model": self._cfg.model.name,
+                                "tools": self._registry.names,
+                                "resumed": self._resume_handle is not None,
+                            },
+                        )
+                        await self._pump(session)
+                except asyncio.CancelledError:
                     raise
-                attempts += 1
-                if not self._cfg.session.resumption.enabled or attempts > 3:
-                    await self._sink.event("error", {"message": f"{type(exc).__name__}: {exc}"})
-                    raise
-                delay = min(2**attempts, 8)
-                log.warning("live session dropped (%s); reconnecting in %ss", exc, delay)
-                await self._sink.event("reconnecting", {"in_seconds": delay, "reason": str(exc)})
-                await asyncio.sleep(delay)
-            finally:
-                self._session = None
-
-        # A call that ends mid-generation should still be billed.
-        await self._finalize_turn()
+                except Exception as exc:
+                    await self._finalize_turn()
+                    if self._closed:
+                        break
+                    if is_permanent_error(exc):
+                        # Retrying cannot help, and backing off three times just
+                        # buries the one message that tells the user what to fix.
+                        log.error("live session failed permanently: %s", exc)
+                        await self._sink.event(
+                            "error",
+                            {
+                                "message": f"{type(exc).__name__}: {exc}",
+                                "permanent": True,
+                                "hint": PERMANENT_HINT,
+                            },
+                        )
+                        raise
+                    if self._received_any:
+                        attempts = 0
+                    attempts += 1
+                    if not self._cfg.session.resumption.enabled or attempts > 3:
+                        await self._sink.event(
+                            "error", {"message": f"{type(exc).__name__}: {exc}"}
+                        )
+                        raise
+                    self.uplink.drain_audio()
+                    delay = min(2**attempts, 8)
+                    log.warning("live session dropped (%s); reconnecting in %ss", exc, delay)
+                    await self._sink.event(
+                        "reconnecting", {"in_seconds": delay, "reason": str(exc)}
+                    )
+                    await asyncio.sleep(delay)
+                finally:
+                    self._session = None
+        finally:
+            # A call that ends mid-generation should still be billed.
+            await self._finalize_turn()
 
     async def _pump(self, session: Any) -> None:
-        async with asyncio.TaskGroup() as tg:
-            up = tg.create_task(self._pump_uplink(session))
-            down = tg.create_task(self._pump_downlink(session))
+        up = asyncio.create_task(self._pump_uplink(session))
+        down = asyncio.create_task(self._pump_downlink(session))
+        try:
             done, pending = await asyncio.wait(
                 {up, down}, return_when=asyncio.FIRST_COMPLETED
             )
+            if self._closed:
+                await self._wait_tool_tasks()
             for task in pending:
                 task.cancel()
             for task in done:
                 with contextlib.suppress(asyncio.CancelledError):
                     task.result()
+        finally:
+            for task in (up, down):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(up, down, return_exceptions=True)
 
     # --------------------------------------------------------------- uplink
 
@@ -234,15 +289,20 @@ class LiveSessionRunner:
         # since that answer arrives in the turn AFTER the function call.
         # So we re-enter the iterator for each turn and let a genuinely closed
         # websocket surface as an exception instead.
-        while not self._closed:
-            turn_messages = 0
-            async for message in session.receive():
-                turn_messages += 1
-                await self._handle_message(message)
-            if turn_messages == 0:
-                # The generator ended without yielding anything, which means the
-                # stream is finished rather than the turn. Stop, don't hot-loop.
-                return
+        try:
+            while not self._closed:
+                turn_messages = 0
+                async for message in session.receive():
+                    self._received_any = True
+                    turn_messages += 1
+                    await self._handle_message(message)
+                await self._wait_tool_tasks()
+                if turn_messages == 0:
+                    # The generator ended without yielding anything, which means the
+                    # stream is finished rather than the turn. Stop, don't hot-loop.
+                    return
+        finally:
+            self._cancel_tool_tasks()
 
     async def _handle_message(self, message: Any) -> None:
         # usage_metadata can ride on ANY server message.
@@ -259,8 +319,12 @@ class LiveSessionRunner:
 
         cancellation = getattr(message, "tool_call_cancellation", None)
         if cancellation is not None:
-            ids = list(getattr(cancellation, "ids", None) or [])
+            ids = [str(i) for i in (getattr(cancellation, "ids", None) or [])]
             self._pending_tools.difference_update(ids)
+            for cid in ids:
+                t = self._tool_tasks.pop(cid, None)
+                if t is not None and not t.done():
+                    t.cancel()
             await self._sink.event("tool_cancelled", {"ids": ids})
 
         update = getattr(message, "session_resumption_update", None)
@@ -300,7 +364,9 @@ class LiveSessionRunner:
             await self._sink.event("citations", audit.as_event())
 
         if getattr(content, "interrupted", False):
+            self._cancel_tool_tasks()
             await self._sink.event("interrupted", {})
+            await self._finalize_turn()
 
         if getattr(content, "turn_complete", False):
             await self._finalize_turn()
@@ -312,26 +378,61 @@ class LiveSessionRunner:
         if not calls:
             return
         names = [getattr(c, "name", "?") for c in calls]
-        self._pending_tools.update(
-            str(getattr(c, "id", "")) for c in calls if getattr(c, "id", None)
-        )
+        call_ids = [str(getattr(c, "id", "")) for c in calls if getattr(c, "id", None)]
+        self._pending_tools.update(call_ids)
         await self._sink.event("tool_call", {"names": names})
 
-        responses = await self._registry.dispatch_all(calls)
-        if self._session is not None:
-            await self._session.send_tool_response(function_responses=responses)
-        await self._sink.event(
-            "tool_result",
-            {
-                "names": names,
-                "errors": [
-                    r.name
+        task = asyncio.create_task(self._execute_tool_calls(calls, names, call_ids))
+        for cid in call_ids or ["_anon"]:
+            self._tool_tasks[cid] = task
+
+    async def _execute_tool_calls(
+        self, calls: list[Any], names: list[str], call_ids: list[str]
+    ) -> None:
+        try:
+            responses = await self._registry.dispatch_all(calls)
+            # Filter out responses for any call IDs that were cancelled while running.
+            if call_ids:
+                responses = [
+                    r
                     for r in responses
-                    if isinstance(getattr(r, "response", None), dict)
-                    and "error" in r.response
-                ],
-            },
-        )
+                    if getattr(r, "id", None) is None
+                    or str(getattr(r, "id", "")) in self._pending_tools
+                ]
+                self._pending_tools.difference_update(call_ids)
+            if responses and self._session is not None:
+                await self._session.send_tool_response(function_responses=responses)
+            if responses:
+                await self._sink.event(
+                    "tool_result",
+                    {
+                        "names": [getattr(r, "name", "?") for r in responses],
+                        "errors": [
+                            r.name
+                            for r in responses
+                            if isinstance(getattr(r, "response", None), dict)
+                            and "error" in r.response
+                        ],
+                    },
+                )
+        except asyncio.CancelledError:
+            self._pending_tools.difference_update(call_ids)
+            raise
+        finally:
+            for cid in call_ids or ["_anon"]:
+                self._tool_tasks.pop(cid, None)
+
+    async def _wait_tool_tasks(self) -> None:
+        tasks = list(set(self._tool_tasks.values()))
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _cancel_tool_tasks(self) -> None:
+        self._pending_tools.clear()
+        for t in set(self._tool_tasks.values()):
+            if not t.done():
+                t.cancel()
+        self._tool_tasks.clear()
 
     # ------------------------------------------------------------------ usage
 

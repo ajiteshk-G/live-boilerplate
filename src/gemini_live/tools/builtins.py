@@ -14,24 +14,36 @@ from .catalog import ToolCandidate
 
 
 async def _get_current_time(args: dict[str, Any]) -> dict[str, Any]:
-    tz = (args or {}).get("timezone") or "UTC"
-    now = datetime.now(UTC)
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    tz_name = str((args or {}).get("timezone") or "UTC").strip() or "UTC"
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
+        tz = UTC  # type: ignore[assignment]
+        tz_name = "UTC"
+    now = datetime.now(tz)
+    tz_label = now.tzname() or tz_name
     return {
         "iso8601": now.isoformat(),
-        "human": now.strftime("%A, %d %B %Y at %H:%M UTC"),
-        "timezone": tz,
+        "human": f"{now.strftime('%A, %d %B %Y at %H:%M')} {tz_label}",
+        "timezone": tz_name,
     }
 
 
 _BUILTINS: dict[str, dict[str, Any]] = {
     "get_current_time": {
-        "description": "Get the current date and time in UTC.",
+        "description": (
+            "Get the current date and time (defaults to UTC, or specify an IANA timezone)."
+        ),
         "schema": {
             "type": "object",
             "properties": {
                 "timezone": {
                     "type": "string",
-                    "description": "Optional IANA timezone name; informational only.",
+                    "description": (
+                        "Optional IANA timezone name (e.g. 'America/New_York', 'Asia/Kolkata')."
+                    ),
                 }
             },
         },

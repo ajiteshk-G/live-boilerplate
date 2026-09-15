@@ -41,6 +41,10 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return sorted(self._by_name)
 
+    @property
+    def total_declaration_tokens(self) -> int:
+        return sum(c.token_cost for c in self._by_name.values())
+
     def declarations(self) -> list[Any]:
         """One ``types.Tool`` bundling every permitted declaration (or [])."""
         from google.genai import types

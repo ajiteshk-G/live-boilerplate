@@ -86,7 +86,7 @@ class ToolCurator:
         pinned: list[str] | None = None,
         exclude: list[str] | None = None,
         allow: list[str] | None = None,
-        embedder: Embedder | None = None,
+        embedder: Any | None = None,
     ) -> None:
         self.mode = mode
         self.max_tools = min(max_tools, 128)
@@ -182,7 +182,8 @@ class ToolCurator:
     ) -> Selection:
         selected: list[ToolCandidate] = []
         for cand in pool:
-            if matches_any(cand.exposed_name, self.allow):
+            cand.pinned = matches_any(cand.exposed_name, self.pinned)
+            if cand.pinned or matches_any(cand.exposed_name, self.allow):
                 selected.append(cand)
             else:
                 cand.drop_reason = "not in tools.allow (manual mode)"

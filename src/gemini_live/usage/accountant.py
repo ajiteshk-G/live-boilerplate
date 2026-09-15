@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import Any, Literal
 
@@ -77,8 +78,10 @@ class TokenAccountant:
         mode: AccountingMode = "auto",
         raw_log_path: str | Path | None = None,
         log_raw_snapshots: bool = True,
+        session_id: str | None = None,
     ) -> None:
         self._mode: AccountingMode = mode
+        self._session_id = session_id or uuid.uuid4().hex[:12]
         self._turn_index = 0
         self._turns: list[TurnUsage] = []
 
@@ -129,6 +132,7 @@ class TokenAccountant:
     def _snapshot_dict(self, um: Any) -> dict[str, Any]:
         return {
             "kind": "snapshot",
+            "session_id": self._session_id,
             "turn": self._turn_index,
             "seq": self._snapshots,
             "prompt_token_count": _i(getattr(um, "prompt_token_count", None)),
@@ -213,7 +217,11 @@ class TokenAccountant:
             with self._raw_log_path.open("a") as fh:
                 for snap in self._raw_this_turn:
                     fh.write(json.dumps(snap) + "\n")
-                record = {"kind": "turn", **turn.as_event(include_service_tier=True)}
+                record = {
+                    "kind": "turn",
+                    "session_id": self._session_id,
+                    **turn.as_event(include_service_tier=True),
+                }
                 fh.write(json.dumps(record) + "\n")
         except OSError as exc:  # logging must never break the call
             log.warning("could not write usage log: %s", exc)

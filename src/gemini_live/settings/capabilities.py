@@ -47,7 +47,7 @@ _MATRIX: list[tuple[str, Capabilities]] = [
             thinking_style="budget",
             supports_affective_dialog=True,
             supports_proactivity=True,
-            supports_language_code=False,
+            supports_language_code=True,
         ),
     ),
 ]
@@ -61,10 +61,16 @@ _DEFAULT = Capabilities(
 
 
 def capabilities_for(model_name: str) -> Capabilities:
-    for prefix, caps in _MATRIX:
+    from dataclasses import replace
+
+    caps = _DEFAULT
+    for prefix, c in _MATRIX:
         if model_name.startswith(prefix):
-            return caps
-    return _DEFAULT
+            caps = c
+            break
+    if "native-audio" in model_name and caps.supports_language_code:
+        caps = replace(caps, supports_language_code=False)
+    return caps
 
 
 def filter_for_model(cfg: AppConfig) -> tuple[AppConfig, list[str]]:

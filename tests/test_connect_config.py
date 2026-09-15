@@ -198,11 +198,16 @@ def test_google_search_tool_is_added_when_enabled():
 
 def test_exclude_domains_reach_the_search_tool():
     """This is the one domain control that is genuinely server-enforced."""
-    cfg = make_cfg(search={"google_search": {"exclude_domains": ["reddit.com"]}})
+    cfg = make_cfg(
+        search={
+            "google_search": {"exclude_domains": ["reddit.com"]},
+            "domains": {"deny": ["https://quora.com/", "reddit.com"]},
+        }
+    )
     live = build_live_config(cfg)
 
     search = next(t.google_search for t in live.tools if getattr(t, "google_search", None))
-    assert search.exclude_domains == ["reddit.com"]
+    assert search.exclude_domains == ["reddit.com", "quora.com"]
 
 
 def test_search_tool_omitted_when_disabled():

@@ -307,18 +307,39 @@ def calibrate_tools(config: str = typer.Option(DEFAULT_CONFIG, "--config", "-c")
                 ]
             )
 
+        async def _pump_exchange(session: Any) -> tuple[str | None, list[str]]:
+            new_handle: str | None = None
+            called_names: list[str] = []
+            # A tool exchange spans two turns: turn 0 emits the function call,
+            # turn 1 answers with its result.
+            for _ in range(2):
+                had_tool_call = False
+                async for message in session.receive():
+                    update = getattr(message, "session_resumption_update", None)
+                    if update is not None and getattr(update, "resumable", False):
+                        new_handle = getattr(update, "new_handle", None) or new_handle
+                    call = getattr(message, "tool_call", None)
+                    if call is not None and getattr(call, "function_calls", None):
+                        had_tool_call = True
+                        called_names.extend(fc.name for fc in call.function_calls)
+                        await session.send_tool_response(
+                            function_responses=[
+                                types.FunctionResponse(
+                                    id=fc.id, name=fc.name, response={"ok": True}
+                                )
+                                for fc in call.function_calls
+                            ]
+                        )
+                if not had_tool_call:
+                    break
+            return new_handle, called_names
+
         handle: str | None = None
         base = build_live_config(cfg, None)
         base.tools = [tool("probe_alpha")]
         async with client.aio.live.connect(model=cfg.model.name, config=base) as session:
             await session.send_realtime_input(text="Please run probe_alpha now.")
-            async for message in session.receive():
-                update = getattr(message, "session_resumption_update", None)
-                if update is not None and getattr(update, "resumable", False):
-                    handle = getattr(update, "new_handle", None)
-                content = getattr(message, "server_content", None)
-                if content is not None and getattr(content, "turn_complete", False):
-                    break
+            handle, _ = await _pump_exchange(session)
 
         if not handle:
             console.print(
@@ -329,24 +350,11 @@ def calibrate_tools(config: str = typer.Option(DEFAULT_CONFIG, "--config", "-c")
 
         swapped = build_live_config(cfg, None, resumption_handle=handle)
         swapped.tools = [tool("probe_beta")]
-        called: list[str] = []
         async with client.aio.live.connect(model=cfg.model.name, config=swapped) as session:
             await session.send_realtime_input(
                 text="Please run probe_beta now. If probe_beta is unavailable, say UNAVAILABLE."
             )
-            async for message in session.receive():
-                call = getattr(message, "tool_call", None)
-                if call is not None:
-                    called += [fc.name for fc in call.function_calls]
-                    await session.send_tool_response(
-                        function_responses=[
-                            types.FunctionResponse(id=fc.id, name=fc.name, response={"ok": True})
-                            for fc in call.function_calls
-                        ]
-                    )
-                content = getattr(message, "server_content", None)
-                if content is not None and getattr(content, "turn_complete", False):
-                    break
+            _, called = await _pump_exchange(session)
 
         console.print(f"\nTools called after resume: {called or '(none)'}")
         if "probe_beta" in called:
@@ -490,12 +498,33 @@ def usage_report(
         )
     console.print(table)
 
+    # Group by session_id (or turn index reset for legacy logs) so that a new
+    # session starting at turn 0 is not miscounted as a compression drop.
+    sessions: list[list[dict[str, Any]]] = []
+    for rec in turns:
+        sid = rec.get("session_id")
+        if (
+            not sessions
+            or (sid and sid != sessions[-1][-1].get("session_id"))
+            or (not sid and rec["turn"] == 0 and sessions[-1][-1]["turn"] >= 0)
+        ):
+            sessions.append([rec])
+        else:
+            sessions[-1].append(rec)
+
+    drops = 0
+    for sess in sessions:
+        sp = [r["scalars"]["prompt"] for r in sess]
+        drops += sum(1 for a, b in zip(sp, sp[1:], strict=False) if b < a - 256)
+
     prompts = [r["scalars"]["prompt"] for r in turns]
-    console.print(f"\n[bold]Session total:[/bold] {total:,} tokens over {len(turns)} turns")
     console.print(
-        f"[bold]Context grew[/bold] {prompts[0]:,} -> {prompts[-1]:,} tokens per turn"
+        f"\n[bold]Total across {len(sessions)} session(s):[/bold] "
+        f"{total:,} tokens over {len(turns)} turns"
     )
-    drops = sum(1 for a, b in zip(prompts, prompts[1:], strict=False) if b < a - 256)
+    console.print(
+        f"[bold]Context range[/bold] {prompts[0]:,} -> {prompts[-1]:,} tokens per turn"
+    )
     console.print(f"[bold]Inferred compression events:[/bold] {drops}")
 
 

@@ -32,18 +32,78 @@ UNSUPPORTED_KEYS = frozenset(
 _WS = re.compile(r"\s+")
 
 
-def sanitize_json_schema(schema: Any) -> Any:
-    """Recursively drop keywords Gemini will not accept."""
+def _resolve_ref(
+    ref: Any, defs: dict[str, Any], seen: frozenset[str]
+) -> dict[str, Any] | None:
+    if not isinstance(ref, str):
+        return None
+    for prefix in ("#/$defs/", "#/definitions/"):
+        if ref.startswith(prefix):
+            name = ref[len(prefix) :]
+            if name in defs and name not in seen:
+                target = defs[name]
+                if isinstance(target, dict):
+                    res = _sanitize(target, defs, seen | {name}, in_properties=False)
+                    return res if isinstance(res, dict) else None
+    return None
+
+
+def _sanitize(
+    schema: Any,
+    defs: dict[str, Any],
+    seen: frozenset[str],
+    *,
+    in_properties: bool = False,
+) -> Any:
     if isinstance(schema, dict):
-        return {
-            k: sanitize_json_schema(v) for k, v in schema.items() if k not in UNSUPPORTED_KEYS
-        }
+        if in_properties:
+            # Keys here are tool parameter names (e.g. "title", "default"),
+            # not JSON Schema keywords, so preserve every key name.
+            return {
+                k: _sanitize(v, defs, seen, in_properties=False)
+                for k, v in schema.items()
+            }
+
+        merged: dict[str, Any] = {}
+        if "$ref" in schema:
+            resolved = _resolve_ref(schema["$ref"], defs, seen)
+            if isinstance(resolved, dict):
+                merged.update(resolved)
+
+        for k, v in schema.items():
+            if k in UNSUPPORTED_KEYS:
+                continue
+            if k == "properties" and isinstance(v, dict):
+                merged[k] = _sanitize(v, defs, seen, in_properties=True)
+            else:
+                merged[k] = _sanitize(v, defs, seen, in_properties=False)
+
+        if (
+            "required" in merged
+            and isinstance(merged["required"], list)
+            and isinstance(merged.get("properties"), dict)
+        ):
+            props = merged["properties"]
+            merged["required"] = [r for r in merged["required"] if r in props]
+
+        return merged
     if isinstance(schema, list):
-        return [sanitize_json_schema(v) for v in schema]
+        return [_sanitize(v, defs, seen, in_properties=False) for v in schema]
     return schema
 
 
-def truncate_description(text: str, max_chars: int) -> str:
+def sanitize_json_schema(schema: Any) -> Any:
+    """Recursively inline $refs and drop keywords Gemini will not accept."""
+    defs: dict[str, Any] = {}
+    if isinstance(schema, dict):
+        for key in ("$defs", "definitions"):
+            sub = schema.get(key)
+            if isinstance(sub, dict):
+                defs.update(sub)
+    return _sanitize(schema, defs, frozenset(), in_properties=False)
+
+
+def truncate_description(text: str | None, max_chars: int) -> str:
     """Shorten a description, preferring to cut at a sentence boundary.
 
     MCP servers routinely ship 500+ character descriptions with worked examples.

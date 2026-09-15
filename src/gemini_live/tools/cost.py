@@ -23,9 +23,11 @@ log = logging.getLogger(__name__)
 _PROBE = "x"
 
 
-def _digest(name: str, description: str, schema: Any) -> str:
+def _digest(name: str, description: str, schema: Any, model: str = "") -> str:
     blob = json.dumps(
-        {"n": name, "d": description, "s": schema}, sort_keys=True, default=str
+        {"m": model, "n": name, "d": description, "s": schema},
+        sort_keys=True,
+        default=str,
     ).encode()
     return hashlib.sha256(blob).hexdigest()[:20]
 
@@ -81,32 +83,36 @@ class DeclarationCostMeter:
 
     def measure(self, name: str, description: str, schema: dict[str, Any]) -> int:
         """Token cost of a single declaration. Returns a heuristic if unavailable."""
-        key = _digest(name, description, schema)
+        key = _digest(name, description, schema, self._model)
         if key in self._cache:
             return self._cache[key]
 
-        cost = self._estimate(name, description, schema)
-        if self._enabled:
-            try:
-                from google.genai import types
+        estimate = self._estimate(name, description, schema)
+        if not self._enabled:
+            # Never persist offline heuristics to disk, or they will permanently
+            # shadow real token counts on subsequent online runs.
+            return estimate
 
-                decl = types.FunctionDeclaration(
-                    name=name,
-                    description=description,
-                    parameters_json_schema=schema,
-                )
-                one_tool = [types.Tool(function_declarations=[decl])]
-                measured = self._count(one_tool) - self._baseline()
-                if measured > 0:
-                    cost = measured
-            except Exception as exc:
-                # Never let measurement break startup; fall back to the estimate.
-                log.debug("count_tokens unavailable for %s (%s); using estimate", name, exc)
-                self._enabled = False
+        try:
+            from google.genai import types
 
-        self._cache[key] = cost
-        self._save_cache()
-        return cost
+            decl = types.FunctionDeclaration(
+                name=name,
+                description=description,
+                parameters_json_schema=schema,
+            )
+            one_tool = [types.Tool(function_declarations=[decl])]
+            measured = self._count(one_tool) - self._baseline()
+            if measured > 0:
+                self._cache[key] = measured
+                self._save_cache()
+                return measured
+        except Exception as exc:
+            # Never let measurement break startup; fall back to the estimate.
+            log.debug("count_tokens unavailable for %s (%s); using estimate", name, exc)
+            self._enabled = False
+
+        return estimate
 
     @staticmethod
     def _estimate(name: str, description: str, schema: dict[str, Any]) -> int:

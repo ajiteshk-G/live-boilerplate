@@ -137,7 +137,8 @@ def create_app(cfg: AppConfig) -> FastAPI:
         sink = _WebSocketSink(ws)
         runner = LiveSessionRunner(cfg, state["client"], tools.registry, sink=sink)
         task = asyncio.create_task(runner.run())
-        try:
+
+        async def _relay_client() -> None:
             while True:
                 message = await ws.receive()
                 if message["type"] == "websocket.disconnect":
@@ -151,6 +152,15 @@ def create_app(cfg: AppConfig) -> FastAPI:
                         await runner.uplink.text(str(payload["text"]))
                     elif kind == "mic" and payload.get("on") is False:
                         await runner.uplink.mic_off()
+
+        relay_task = asyncio.create_task(_relay_client())
+        try:
+            done, pending = await asyncio.wait(
+                {task, relay_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            for p in pending:
+                p.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
         except WebSocketDisconnect:
             pass
         except Exception:
@@ -158,9 +168,12 @@ def create_app(cfg: AppConfig) -> FastAPI:
         finally:
             sink.close()
             await runner.close()
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+            for t in (task, relay_task):
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(task, relay_task, return_exceptions=True)
+            with contextlib.suppress(Exception):
+                await ws.close()
 
     @app.get("/")
     async def index() -> FileResponse:
