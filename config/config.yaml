@@ -1,0 +1,246 @@
+# =============================================================================
+# Gemini Live boilerplate - reference configuration
+# =============================================================================
+# Every key that the application understands appears below, annotated. The
+# config schema sets `extra="forbid"`, so a misspelled key is a hard error
+# rather than a silently ignored setting.
+#
+# `${VAR}` and `${VAR:-default}` are interpolated from the environment (and
+# from a `.env` file in the project root, if present).
+#
+# Validate any edits with:  uv run glive validate-config
+# =============================================================================
+
+app:
+  name: gemini-live-boilerplate
+  log_level: INFO # DEBUG | INFO | WARNING | ERROR
+
+# --------------------------------------------------------------------- vertex
+# This boilerplate is Vertex-AI-only (matching the intro_multimodal_live_api
+# notebook). Auth comes from Application Default Credentials:
+#   gcloud auth application-default login
+vertex:
+  project: ${GOOGLE_CLOUD_PROJECT}
+  location: us-central1
+  api_version: v1beta1
+
+# ---------------------------------------------------------------------- model
+model:
+  name: gemini-live-2.5-flash-native-audio
+
+  # The Live API permits EXACTLY ONE response modality per session.
+  # ["AUDIO"] for a voice call, ["TEXT"] for a text-only session.
+  response_modalities: ["AUDIO"]
+
+  system_instruction: |
+    You are a helpful, concise voice assistant.
+    Keep spoken answers short - two or three sentences unless the user asks
+    for detail. When you use a tool, briefly say what you are doing.
+
+  # Leave null to use the model defaults.
+  temperature: null
+  top_p: null
+  max_output_tokens: null
+
+# --------------------------------------------------------------------- speech
+# Only applies when response_modalities is ["AUDIO"].
+speech:
+  # Puck | Charon | Kore | Fenrir | Aoede | Leda | Orus | Zephyr
+  voice_name: Kore
+  # BCP-47, e.g. en-US, hi-IN, de-DE. null = model default.
+  language_code: null
+
+# -------------------------------------------------------------- transcription
+# Server-side transcripts of what was heard and what was said. These are what
+# populate the conversation panel in the web UI; turning both off leaves you
+# with audio only and no text record.
+transcription:
+  input: true
+  output: true
+
+# ------------------------------------------------------------------------ vad
+# Automatic voice activity detection: the server decides when you stopped
+# speaking. Disable only if you intend to drive turn-taking manually.
+vad:
+  enabled: true
+  start_sensitivity: START_SENSITIVITY_HIGH # HIGH detects speech more eagerly
+  end_sensitivity: END_SENSITIVITY_LOW # LOW waits longer before ending a turn
+  prefix_padding_ms: 20
+  silence_duration_ms: 400
+
+# ------------------------------------------------------------------- thinking
+# Use `level` on Gemini 3.x models, `budget` on 2.5-era models - never both.
+# Thinking tokens are billed and reported separately (usage.thoughts).
+thinking:
+  level: null # minimal | low | medium | high
+  budget: null # integer token budget, e.g. 1024
+  include_thoughts: false
+
+# -------------------------------------------------------------------- session
+session:
+  # Context compression is a COST control as much as a quality one: every turn
+  # is billed for the entire context, so an uncompressed session gets more
+  # expensive with each exchange. Leaving this on keeps the prompt bounded.
+  context_window_compression:
+    enabled: true
+    trigger_tokens: 25600
+    sliding_window_target_tokens: 12800
+
+  # Lets the runner transparently reconnect after a dropped socket or a
+  # GoAway, keeping conversation state.
+  resumption:
+    enabled: true
+
+  max_duration_minutes: 30
+
+# ---------------------------------------------------------------------- media
+media:
+  enable_video_input: false
+  resolution: MEDIA_RESOLUTION_LOW # LOW | MEDIUM | HIGH
+
+# ---------------------------------------------------------------------- usage
+# Token accounting. See docs in src/gemini_live/usage/ for the semantics -
+# in particular, Live usageMetadata is cumulative WITHIN a turn and resets at
+# each turnComplete, so naive per-message summing badly over-counts.
+usage:
+  enabled: true
+
+  # auto      - detect empirically whether the stream is cumulative or delta
+  # last_wins - take the final snapshot of each turn (cumulative streams)
+  # delta_sum - sum per-message deltas
+  # Run `uv run glive calibrate-usage` to see which one your model emits.
+  accounting_mode: auto
+
+  log_path: ./logs/usage.jsonl
+  log_raw_snapshots: true
+  show_in_ui: true
+
+  report:
+    per_turn: true
+    session_total: true
+    by_modality: true
+    context_growth: true
+    cost_drivers: true
+
+  # Set any entry to null to disable that alert.
+  alerts:
+    warn_prompt_tokens_per_turn: 30000
+    warn_rent_ratio: 0.90 # fraction of a turn's cost that is re-billed context
+    warn_session_total: 500000
+
+  # Dollar estimates are OFF by default: a stale rate card is worse than no
+  # number at all. To enable, uncomment and fill in the current Vertex rates.
+  pricing: null
+  # pricing:
+  #   text_input_per_1k: 0.0
+  #   audio_input_per_1k: 0.0
+  #   text_output_per_1k: 0.0
+  #   audio_output_per_1k: 0.0
+  #   thinking_per_1k: 0.0
+  #   currency: USD
+
+# ---------------------------------------------------------------------- tools
+tools:
+  # Tools are frozen at session setup - there is no mid-session tool-update
+  # message in the public Live API. Whatever is selected here is what the
+  # model carries, and re-billed, for every single turn of the session.
+  # Google's guidance is to keep the active set to 10-20 tools; the hard API
+  # cap is 128 declarations.
+  curation:
+    # auto   - rank the full MCP toolset against `purpose` and pack the best
+    #          ones under the budget (what you want with a large toolset)
+    # manual - use exactly the globs in `tools.allow`
+    mode: auto
+
+    # What this agent is FOR. This is the text tool descriptions are ranked
+    # against, so the more specific it is, the better the selection.
+    # Empty means "fall back to model.system_instruction".
+    purpose: ""
+
+    max_tools: 20
+    budget_tokens: 6000
+    min_score: 0.25 # drop tools scoring below this
+    dedupe_threshold: 0.92 # drop near-identical tools above this similarity
+    max_desc_chars: 200 # truncate descriptions at a sentence boundary
+
+    embedding_model: gemini-embedding-001
+    embedding_dimensions: 768
+
+    # A cheap non-Live model used only to MEASURE declaration token cost via
+    # count_tokens. Never used for conversation.
+    cost_model: gemini-2.0-flash-001
+
+  # Glob patterns over exposed names (`<server>__<tool>`).
+  pinned: [] # always included, exempt from scoring - e.g. ["*__search_docs"]
+  exclude: [] # never included, applied first - e.g. ["*__delete_*"]
+  allow: [] # required when curation.mode is "manual"
+
+  # Re-selecting tools mid-conversation requires a reconnect, and how session
+  # resumption interacts with a CHANGED tool list is undocumented. Off until
+  # you have verified it with `uv run glive calibrate-tools`.
+  adaptive:
+    enabled: false
+    reselect_on_tool_miss: true
+
+  # Local in-process tools, always available without an MCP server.
+  builtins:
+    get_current_time:
+      enabled: true
+
+  # MCP servers to draw tools from. Add as many as you like - the curator is
+  # what keeps a large toolset from bloating the context.
+  mcp: []
+  # - name: filesystem
+  #   enabled: true
+  #   transport: stdio
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+  #   env: {}
+  #   startup_timeout_s: 20.0
+  #   tools: []            # per-server allow-list; empty = all of them
+  #
+  # - name: docs
+  #   enabled: true
+  #   transport: streamable_http
+  #   url: https://example.com/mcp
+  #   headers:
+  #     Authorization: Bearer ${DOCS_MCP_TOKEN}
+  #   startup_timeout_s: 20.0
+  #   tools: []
+
+# --------------------------------------------------------------------- search
+search:
+  google_search:
+    enabled: true
+    # Vertex supports a native DENY-list, and it is enforced server-side.
+    exclude_domains: []
+    # exclude_domains: ["reddit.com", "pinterest.com"]
+
+  domains:
+    # There is NO native allow-list field in the Live API. Entries here are
+    # enforced by (a) system-instruction rules and (b) a post-hoc audit of
+    # grounding metadata. See `enforcement` below for what that does and does
+    # not guarantee.
+    allow: []
+    # allow: ["cloud.google.com", "ai.google.dev", "github.com"]
+
+    # Mirrored into google_search.exclude_domains, which IS server-enforced.
+    deny: []
+
+  # audit           - log allow-list violations after the fact. The model may
+  #                   already have spoken a non-approved source. Zero latency.
+  # strict_buffered - hold audio until citations are checked. Adds latency,
+  #                   but nothing disallowed reaches the speaker.
+  enforcement: audit
+
+  inject_domain_rules_into_system_instruction: true
+  log_violations: ./logs/violations.jsonl
+
+# --------------------------------------------------------------------- server
+server:
+  host: 127.0.0.1
+  port: 8080
+  # Chrome only grants microphone access in a SECURE CONTEXT. Reach the UI at
+  # http://localhost:8080 via an SSH tunnel, not at the cloudtop hostname:
+  #   ssh -L 8080:localhost:8080 ajiteshk.c.googlers.com
+  cors_origins: ["http://localhost:8080"]

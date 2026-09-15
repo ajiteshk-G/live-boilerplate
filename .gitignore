@@ -1,0 +1,38 @@
+# Secrets and local overrides
+.env
+.env.*
+!.env.example
+config/config.local.yaml
+
+# Session output: token logs, policy violations, TLS material
+logs/
+certs/
+*.pem
+
+# Tool declaration cost cache (keyed by schema digest; safe to delete)
+.glive_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Resolved against a corporate package mirror, so the pinned URLs are not
+# reachable elsewhere. Let each machine resolve its own.
+uv.lock
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

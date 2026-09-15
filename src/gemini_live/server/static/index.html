@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemini Live · Voice Console</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<div id="insecure-banner" class="banner" hidden>
+  <strong>Microphone blocked: insecure origin.</strong>
+  <p>
+    <code id="insecure-origin"></code> is not a secure context, so Chrome will not grant
+    microphone access. Use an SSH port-forward and open <code>http://localhost:8080</code>:
+  </p>
+  <pre>ssh -L 8080:localhost:8080 ajiteshk.c.googlers.com</pre>
+  <p class="muted">Alternatives: run with <code>--ssl-certfile/--ssl-keyfile</code>, or launch Chrome with
+  <code>--unsafely-treat-insecure-origin-as-secure=&lt;origin&gt;</code>.</p>
+</div>
+
+<header>
+  <div class="brand">
+    <h1>Gemini Live</h1>
+    <span id="model-name" class="muted">…</span>
+  </div>
+  <div class="header-right">
+    <span id="status" class="status">Connecting…</span>
+    <button id="mic-btn">Talk</button>
+  </div>
+</header>
+
+<main>
+  <!-- conversation -->
+  <section class="panel conversation">
+    <h2>Conversation</h2>
+    <div id="transcript" class="transcript"></div>
+    <form id="text-form" class="text-form">
+      <input id="text-input" type="text" placeholder="Or type a message…" autocomplete="off">
+      <button type="submit">Send</button>
+    </form>
+    <div id="citations" class="citations"></div>
+  </section>
+
+  <!-- tokens -->
+  <section class="panel tokens">
+    <h2>Tokens &amp; cost</h2>
+
+    <div class="session-summary">
+      <div><span class="big" id="session-total">0</span><span class="label">session total</span></div>
+      <div><span class="big" id="session-turns">0</span><span class="label">turns</span></div>
+      <div><span class="big" id="session-prompt">0</span><span class="label">prompt</span></div>
+      <div><span class="big" id="session-response">0</span><span class="label">response</span></div>
+    </div>
+
+    <div class="growth-box">
+      <div class="growth-head">
+        <span>Context per turn</span>
+        <span class="muted">peak <span id="growth-max">0</span></span>
+      </div>
+      <svg id="growth" viewBox="0 0 260 56" preserveAspectRatio="none"></svg>
+      <p class="muted small">
+        Every turn is billed for the entire context, so this line climbing is the cost model in action.
+        Dots mark inferred compression events.
+      </p>
+    </div>
+
+    <div class="overhead">
+      <span class="label">Tool declarations</span>
+      <span id="tool-overhead" class="val">—</span>
+    </div>
+
+    <div id="turns" class="turns"></div>
+  </section>
+
+  <!-- context -->
+  <section class="panel context">
+    <h2>Session context</h2>
+
+    <div class="kv">
+      <span class="label">Tools selected</span>
+      <span id="tool-count" class="val">—</span>
+    </div>
+    <div class="kv">
+      <span class="label">Declaration cost</span>
+      <span id="tool-tokens" class="val">—</span>
+    </div>
+    <ul id="tool-list" class="tool-list"></ul>
+
+    <div class="kv">
+      <span class="label">Approved domains</span>
+    </div>
+    <p id="domain-list" class="muted small"></p>
+
+    <h2>Activity</h2>
+    <div id="events" class="events"></div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

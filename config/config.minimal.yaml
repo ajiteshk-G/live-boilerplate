@@ -1,0 +1,4 @@
+# Smallest config that runs. Everything else takes its default.
+#   uv run glive serve --config config/config.minimal.yaml
+vertex:
+  project: ${GOOGLE_CLOUD_PROJECT}

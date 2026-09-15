@@ -1,0 +1,130 @@
+"""Translate ``AppConfig`` into a ``types.LiveConnectConfig``.
+
+Kept as a pure function so it is trivially testable without any network access.
+Fields are only set when actually configured -- sending an explicit ``None`` is a
+reliable way to get rejected by the backend.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ..search.domain_policy import DomainPolicy
+from ..settings.schema import AppConfig
+from ..tools.registry import ToolRegistry
+
+
+def build_system_instruction(cfg: AppConfig, policy: DomainPolicy) -> str:
+    text = cfg.model.system_instruction.strip()
+    if cfg.search.inject_domain_rules_into_system_instruction:
+        rules = policy.system_instruction_rules()
+        if rules:
+            text = f"{text}\n{rules}"
+    return text
+
+
+def build_live_config(
+    cfg: AppConfig,
+    registry: ToolRegistry | None = None,
+    *,
+    policy: DomainPolicy | None = None,
+    resumption_handle: str | None = None,
+) -> Any:
+    from google.genai import types
+
+    policy = policy or DomainPolicy(cfg.search.domains.allow, cfg.search.domains.deny)
+    kwargs: dict[str, Any] = {
+        "response_modalities": [types.Modality(m) for m in cfg.model.response_modalities],
+        "system_instruction": types.Content(
+            parts=[types.Part(text=build_system_instruction(cfg, policy))]
+        ),
+    }
+
+    if cfg.model.temperature is not None:
+        kwargs["temperature"] = cfg.model.temperature
+    if cfg.model.top_p is not None:
+        kwargs["top_p"] = cfg.model.top_p
+    if cfg.model.max_output_tokens is not None:
+        kwargs["max_output_tokens"] = cfg.model.max_output_tokens
+
+    # --- voice -------------------------------------------------------------
+    if cfg.speech.voice_name:
+        speech: dict[str, Any] = {
+            "voice_config": types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                    voice_name=cfg.speech.voice_name
+                )
+            )
+        }
+        if cfg.speech.language_code:
+            speech["language_code"] = cfg.speech.language_code
+        kwargs["speech_config"] = types.SpeechConfig(**speech)
+
+    # --- transcription -----------------------------------------------------
+    if cfg.transcription.input:
+        kwargs["input_audio_transcription"] = types.AudioTranscriptionConfig()
+    if cfg.transcription.output:
+        kwargs["output_audio_transcription"] = types.AudioTranscriptionConfig()
+
+    # --- voice activity detection -----------------------------------------
+    detection: dict[str, Any] = {"disabled": not cfg.vad.enabled}
+    if cfg.vad.enabled:
+        detection["start_of_speech_sensitivity"] = types.StartSensitivity(
+            cfg.vad.start_sensitivity
+        )
+        detection["end_of_speech_sensitivity"] = types.EndSensitivity(cfg.vad.end_sensitivity)
+        if cfg.vad.prefix_padding_ms is not None:
+            detection["prefix_padding_ms"] = cfg.vad.prefix_padding_ms
+        if cfg.vad.silence_duration_ms is not None:
+            detection["silence_duration_ms"] = cfg.vad.silence_duration_ms
+    kwargs["realtime_input_config"] = types.RealtimeInputConfig(
+        automatic_activity_detection=types.AutomaticActivityDetection(**detection)
+    )
+
+    # --- thinking ----------------------------------------------------------
+    thinking: dict[str, Any] = {}
+    if cfg.thinking.budget is not None:
+        thinking["thinking_budget"] = cfg.thinking.budget
+    if cfg.thinking.level is not None:
+        thinking["thinking_level"] = cfg.thinking.level
+    if cfg.thinking.include_thoughts:
+        thinking["include_thoughts"] = True
+    if thinking:
+        try:
+            kwargs["thinking_config"] = types.ThinkingConfig(**thinking)
+        except TypeError:
+            # Older SDKs lack thinking_level; retry without it rather than crash.
+            thinking.pop("thinking_level", None)
+            if thinking:
+                kwargs["thinking_config"] = types.ThinkingConfig(**thinking)
+
+    # --- session lifetime --------------------------------------------------
+    # Context-window compression is a COST control as much as a quality one:
+    # every turn re-bills the whole resident context.
+    comp = cfg.session.context_window_compression
+    if comp.enabled:
+        kwargs["context_window_compression"] = types.ContextWindowCompressionConfig(
+            trigger_tokens=comp.trigger_tokens,
+            sliding_window=types.SlidingWindow(
+                target_tokens=comp.sliding_window_target_tokens
+            ),
+        )
+    if cfg.session.resumption.enabled:
+        kwargs["session_resumption"] = types.SessionResumptionConfig(handle=resumption_handle)
+
+    # --- media -------------------------------------------------------------
+    if cfg.media.resolution:
+        kwargs["media_resolution"] = types.MediaResolution(cfg.media.resolution)
+
+    # --- tools -------------------------------------------------------------
+    tools: list[Any] = list(registry.declarations()) if registry else []
+    if cfg.search.google_search.enabled:
+        search_kwargs: dict[str, Any] = {}
+        if cfg.search.google_search.exclude_domains:
+            # Real server-side deny-list. Vertex-only; the Developer API rejects it.
+            search_kwargs["exclude_domains"] = cfg.search.google_search.exclude_domains
+        tools.append(types.Tool(google_search=types.GoogleSearch(**search_kwargs)))
+    if tools:
+        kwargs["tools"] = tools
+
+    return types.LiveConnectConfig(**kwargs)
