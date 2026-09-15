@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .voices import LIVE_VOICES, canonical_voice, is_supported_language
+
 
 class _Base(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -57,8 +59,47 @@ class ModelSection(_Base):
 
 
 class SpeechSection(_Base):
+    """Voice (timbre) and language (accent) of the spoken response.
+
+    These are independent: a voice is not tied to a locale. The Indian accent
+    comes from ``language_code``, not from ``voice_name``.
+    """
+
     voice_name: str | None = "Kore"
-    language_code: str | None = None
+    language_code: str | None = "en-IN"
+
+    enforce_language_in_system_instruction: bool = True
+    """Also state the language as a rule in the system instruction.
+
+    Required for native-audio models, which ignore ``language_code`` outright
+    and otherwise drift back to US English mid-call.
+    """
+
+    @field_validator("voice_name")
+    @classmethod
+    def _known_voice(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        canonical = canonical_voice(v)
+        if canonical is None:
+            raise ValueError(
+                f"speech.voice_name {v!r} is not a Live API voice. "
+                f"Run `glive voices` for the list of {len(LIVE_VOICES)}."
+            )
+        return canonical
+
+    @field_validator("language_code")
+    @classmethod
+    def _known_language(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        code = v.strip().replace("_", "-")
+        if not is_supported_language(code):
+            raise ValueError(
+                f"speech.language_code {v!r} is not a Live API language. "
+                "Run `glive voices` for the list (e.g. en-IN, hi-IN, en-US)."
+            )
+        return code
 
 
 class TranscriptionSection(_Base):

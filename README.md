@@ -34,8 +34,13 @@ uv run glive doctor
 uv run glive serve
 ```
 
-Then open **<http://localhost:8080>** and click *Connect*. The browser will ask
-for microphone permission the first time.
+Then open **<http://localhost:8080>** and click **Start call**. The browser will
+ask for microphone permission the first time.
+
+**Stop call** hangs up: it ends the Live session server-side, so the model stops
+generating and the session stops being billed. Loading the page does *not* start
+a session — the socket (and with it the Live session) opens only when you start a
+call or send a message.
 
 > [!TIP]
 > Running on your own machine needs no TLS and no tunnel: browsers treat
@@ -129,6 +134,33 @@ tools:
 
 Set `mode: manual` if you would rather hand-maintain `tools.allow`.
 
+### Voice and language
+
+These are independent, and conflating them is the usual mistake:
+
+- **`speech.voice_name`** is a *timbre*. There is no "Indian voice" — all 30
+  prebuilt voices speak every supported language.
+- **`speech.language_code`** is what decides the language and the regional
+  accent. **`en-IN`** (Indian English) is what ships selected here; `hi-IN`,
+  `ta-IN`, `bn-IN` and the rest of the Indian locales are listed in the config.
+
+```yaml
+speech:
+  voice_name: Kore        # one of 30; 8 of them work on every Live model
+  language_code: en-IN    # <- the Indian accent lives here
+  enforce_language_in_system_instruction: true
+```
+
+The catch: **native-audio models ignore `language_code`** — they detect and
+switch language by themselves. Google's documented workaround is to state the
+language as a rule in the system instruction, and that is what
+`enforce_language_in_system_instruction` does. So on the default model the
+language is pinned by prompt; on half-cascade models the field is sent as well.
+
+```bash
+uv run glive voices    # all voices + languages, with your selection marked
+```
+
 ---
 
 ## Domain restriction: what it actually guarantees
@@ -193,6 +225,7 @@ Everything is logged to `logs/usage.jsonl`; analyse a past session offline with 
 | `glive serve` | Run the web UI and Live relay | yes |
 | `glive validate-config` | Validate and pretty-print the resolved config | no |
 | `glive doctor` | Check credentials, model access, and MCP connectivity | yes |
+| `glive voices` | List every voice and language, marking the configured ones | no |
 | `glive tools explain` | Show the curated tool set, drop reasons, and projected cost | yes¹ |
 | `glive usage-report` | Offline analysis of `logs/usage.jsonl` | no |
 | `glive selftest` | Headless TEXT session exercising the tool loop and token reporting | yes |

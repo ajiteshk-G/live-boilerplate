@@ -44,11 +44,73 @@ model:
 
 # --------------------------------------------------------------------- speech
 # Only applies when response_modalities is ["AUDIO"].
+#
+# VOICE and LANGUAGE are independent. A voice is a timbre, not a locale: there
+# is no "Indian voice". Every voice can speak every supported language, and it
+# is `language_code` below that decides the language and the regional accent.
+#
+# Run `uv run glive voices` to print these lists with the current selection
+# marked.
 speech:
-  # Puck | Charon | Kore | Fenrir | Aoede | Leda | Orus | Zephyr
+  # ---- voice_name: all 30 prebuilt voices (name -- character) --------------
+  # The eight marked (*) exist on EVERY Live model; the rest require a
+  # native-audio model.
+  #   Zephyr (*)    Bright        Puck (*)      Upbeat      Charon (*)   Informative
+  #   Kore (*)      Firm          Fenrir (*)    Excitable   Leda (*)     Youthful
+  #   Orus (*)      Firm          Aoede (*)     Breezy      Callirrhoe   Easy-going
+  #   Autonoe       Bright        Enceladus     Breathy     Iapetus      Clear
+  #   Umbriel       Easy-going    Algieba       Smooth      Despina      Smooth
+  #   Erinome       Clear         Algenib       Gravelly    Rasalgethi   Informative
+  #   Laomedeia     Upbeat        Achernar      Soft        Alnilam      Firm
+  #   Schedar       Even          Gacrux        Mature      Pulcherrima  Forward
+  #   Achird        Friendly      Zubenelgenubi Casual      Vindemiatrix Gentle
+  #   Sadachbia     Lively        Sadaltager    Knowledgeable  Sulafat   Warm
   voice_name: Kore
-  # BCP-47, e.g. en-US, hi-IN, de-DE. null = model default.
-  language_code: null
+
+  # ---- language_code -------------------------------------------------------
+  # INDIAN LOCALES (this is the "Indian voice" knob -- en-IN is SELECTED):
+  #   en-IN  English (India)   <-- selected below
+  #   hi-IN  Hindi             bn-IN  Bengali        gu-IN  Gujarati
+  #   kn-IN  Kannada           ml-IN  Malayalam      mr-IN  Marathi
+  #   or-IN  Odia              pa-IN  Punjabi        ta-IN  Tamil
+  #   te-IN  Telugu            ur-IN  Urdu           as-IN  Assamese
+  #
+  # OTHER COMMON LOCALES:
+  #   en-US  en-GB  en-AU  de-DE  fr-FR  fr-CA  es-ES  es-US  pt-BR  it-IT
+  #   nl-NL  pl-PL  ru-RU  tr-TR  ar-XA  ja-JP  ko-KR  zh-CN  id-ID  vi-VN
+  #   th-TH  uk-UA  ro-RO  sv-SE  da-DK  fi-FI  no-NO  cs-CZ  hu-HU  el-GR
+  #
+  # ALL 70 SUPPORTED LANGUAGES (base BCP-47 code; append a region for accent,
+  # e.g. `en` -> `en-IN`):
+  #   af Afrikaans     am Amharic       ar Arabic        as Assamese
+  #   az Azerbaijani   be Belarusian    bg Bulgarian     bn Bengali
+  #   bs Bosnian       ca Catalan       cs Czech         da Danish
+  #   de German        el Greek         en English       es Spanish
+  #   et Estonian      eu Basque        fi Finnish       fil Filipino
+  #   fr French        gl Galician      gu Gujarati      hi Hindi
+  #   hr Croatian      hu Hungarian     hy Armenian      id Indonesian
+  #   is Icelandic     it Italian       iw Hebrew        ja Japanese
+  #   ka Georgian      kk Kazakh        km Khmer         kn Kannada
+  #   ko Korean        lo Lao           lt Lithuanian    lv Latvian
+  #   mk Macedonian    ml Malayalam     mn Mongolian     mr Marathi
+  #   ms Malay         ne Nepali        nl Dutch         no Norwegian
+  #   or Odia          pa Punjabi       pl Polish        pt Portuguese
+  #   ro Romanian      ru Russian       sk Slovak        sl Slovenian
+  #   sq Albanian      sr Serbian       sv Swedish       sw Swahili
+  #   ta Tamil         te Telugu        th Thai          tr Turkish
+  #   uk Ukrainian     ur Urdu          uz Uzbek         vi Vietnamese
+  #   zh Chinese       zu Zulu
+  #
+  # null = let the model decide.
+  language_code: en-IN
+
+  # Native-audio models (the default model here) IGNORE language_code: they
+  # detect and switch language on their own. Google's documented workaround is
+  # to state the language as a rule in the system instruction, which is what
+  # this does. Turn it off only if you want the model to free-run across
+  # languages.
+  enforce_language_in_system_instruction: true
+
 
 # -------------------------------------------------------------- transcription
 # Server-side transcripts of what was heard and what was said. These are what

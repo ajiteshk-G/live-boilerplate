@@ -18,10 +18,13 @@ from ..live.runner import LiveSessionRunner
 from ..pipeline import ToolPipeline, ToolPipelineResult
 from ..settings.capabilities import filter_for_model
 from ..settings.schema import AppConfig, redact
-from .ws_protocol import decode_client_message, encode_event
+from .ws_protocol import apply_client_message, decode_client_message, encode_event
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
+
+_HANGUP_FLUSH_SECONDS = 5.0
+"""How long to let the runner finish its last turn after the user hangs up."""
 
 
 class _WebSocketSink:
@@ -147,11 +150,17 @@ def create_app(cfg: AppConfig) -> FastAPI:
                     await runner.uplink.audio(data)
                 elif (text := message.get("text")) is not None:
                     payload = decode_client_message(text)
-                    kind = payload.get("type")
-                    if kind == "text" and payload.get("text"):
-                        await runner.uplink.text(str(payload["text"]))
-                    elif kind == "mic" and payload.get("on") is False:
-                        await runner.uplink.mic_off()
+                    if not await apply_client_message(payload, runner):
+                        # Acknowledge first: once runner.run() returns, the
+                        # endpoint cancels this relay, so an ack sent after the
+                        # wait below would race with that cancellation.
+                        await sink.event(
+                            "session_ended", {"reason": "ended by the user"}
+                        )
+                        # Then give the runner a moment to commit its final turn
+                        # and emit the closing usage events.
+                        await asyncio.wait({task}, timeout=_HANGUP_FLUSH_SECONDS)
+                        break
 
         relay_task = asyncio.create_task(_relay_client())
         try:

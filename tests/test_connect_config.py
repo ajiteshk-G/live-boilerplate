@@ -56,6 +56,8 @@ def test_domain_rules_are_injected():
 def test_injection_can_be_disabled():
     cfg = make_cfg(
         model={"system_instruction": "Be helpful."},
+        # The language rule is a separate concern; silence it for an exact match.
+        speech={"language_code": None},
         search={
             "domains": {"allow": ["cloud.google.com"]},
             "inject_domain_rules_into_system_instruction": False,
@@ -66,7 +68,9 @@ def test_injection_can_be_disabled():
 
 
 def test_no_rules_appended_when_no_domains_configured():
-    cfg = make_cfg(model={"system_instruction": "Be helpful."})
+    cfg = make_cfg(
+        model={"system_instruction": "Be helpful."}, speech={"language_code": None}
+    )
     assert build_system_instruction(cfg, DomainPolicy()) == "Be helpful."
 
 

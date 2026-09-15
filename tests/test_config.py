@@ -234,6 +234,8 @@ def test_incompatible_thinking_field_is_dropped_with_a_warning():
         {
             "vertex": {"project": "p"},
             "model": {"name": "gemini-3-pro-preview"},
+            # Kept out of the way so this test sees only the thinking warning.
+            "speech": {"language_code": None},
             "thinking": {"budget": 1024},
         }
     )
@@ -256,12 +258,31 @@ def test_filtering_does_not_mutate_the_original_config():
     assert cfg.thinking.budget == 1024
 
 
-def test_language_code_dropped_for_native_audio_models():
+def test_language_code_survives_for_native_audio_to_reach_the_system_instruction():
+    """Native audio ignores the field, but the requirement must not be lost:
+    build_live_config turns it into a system-instruction rule."""
     cfg = AppConfig.model_validate(
         {
             "vertex": {"project": "p"},
             "model": {"name": "gemini-live-2.5-flash-native-audio"},
-            "speech": {"language_code": "en-US"},
+            "speech": {"language_code": "en-IN"},
+        }
+    )
+    filtered, warnings = filter_for_model(cfg)
+
+    assert filtered.speech.language_code == "en-IN"
+    assert any("system instruction" in w for w in warnings)
+
+
+def test_language_code_dropped_when_system_instruction_enforcement_is_off():
+    cfg = AppConfig.model_validate(
+        {
+            "vertex": {"project": "p"},
+            "model": {"name": "gemini-live-2.5-flash-native-audio"},
+            "speech": {
+                "language_code": "en-IN",
+                "enforce_language_in_system_instruction": False,
+            },
         }
     )
     filtered, warnings = filter_for_model(cfg)
@@ -270,11 +291,26 @@ def test_language_code_dropped_for_native_audio_models():
     assert any("language" in w for w in warnings)
 
 
+def test_language_code_is_untouched_on_models_that_accept_it():
+    cfg = AppConfig.model_validate(
+        {
+            "vertex": {"project": "p"},
+            "model": {"name": "gemini-2.5-flash"},
+            "speech": {"language_code": "hi-IN"},
+        }
+    )
+    filtered, warnings = filter_for_model(cfg)
+
+    assert filtered.speech.language_code == "hi-IN"
+    assert warnings == []
+
+
 def test_compatible_config_produces_no_warnings():
     cfg = AppConfig.model_validate(
         {
             "vertex": {"project": "p"},
             "model": {"name": "gemini-live-2.5-flash-native-audio"},
+            "speech": {"language_code": None},
             "thinking": {"budget": 512},
         }
     )

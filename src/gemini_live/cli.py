@@ -17,7 +17,7 @@ from .live.client import build_client
 from .live.events import CollectingSink
 from .live.runner import LiveSessionRunner
 from .pipeline import ToolPipeline
-from .settings.capabilities import filter_for_model
+from .settings.capabilities import capabilities_for, filter_for_model
 from .settings.loader import ConfigError, load_config
 from .settings.schema import AppConfig, redact
 
@@ -119,6 +119,90 @@ def doctor(config: str = typer.Option(DEFAULT_CONFIG, "--config", "-c")) -> None
 
     console.print(table)
     console.print("\n[green]Doctor checks passed.[/green]")
+
+
+@app.command("voices")
+def voices_cmd(
+    config: str = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
+    languages: bool = typer.Option(
+        True, "--languages/--no-languages", help="Also print the language list"
+    ),
+) -> None:
+    """List every Live API voice and language, marking the configured ones.
+
+    Voice and language are independent: a voice is a timbre, not a locale, so
+    an Indian accent comes from speech.language_code (en-IN, hi-IN, ...), never
+    from the voice name.
+    """
+    from .settings.voices import (
+        CORE_VOICES,
+        INDIAN_LOCALES,
+        LIVE_LANGUAGES,
+        LIVE_VOICES,
+        base_language,
+        language_directive,
+        language_label,
+    )
+
+    cfg = _load(config)
+    caps = capabilities_for(cfg.model.name)
+    chosen_voice = cfg.speech.voice_name
+    chosen_lang = cfg.speech.language_code
+
+    voice_table = Table("voice", "character", "every model?", title="VOICES (30)")
+    for name, character in LIVE_VOICES.items():
+        selected = name == chosen_voice
+        voice_table.add_row(
+            f"[green]{name} \u2190 selected[/green]" if selected else name,
+            character,
+            "yes" if name in CORE_VOICES else "native-audio only",
+        )
+    console.print(voice_table)
+
+    if languages:
+        indian = Table("code", "language", title="INDIAN LOCALES")
+        for code, label in INDIAN_LOCALES.items():
+            selected = code == chosen_lang
+            indian.add_row(
+                f"[green]{code} \u2190 selected[/green]" if selected else code, label
+            )
+        console.print(indian)
+
+        console.print(
+            f"\n[bold]All {len(LIVE_LANGUAGES)} supported languages[/bold] "
+            "(add a region for the accent, e.g. en -> en-IN):"
+        )
+        codes = sorted(LIVE_LANGUAGES)
+        console.print(
+            "  "
+            + ", ".join(
+                f"[green]{c}[/green]"
+                if chosen_lang and base_language(chosen_lang) == c
+                else c
+                for c in codes
+            )
+        )
+
+    console.print(
+        f"\n[bold]Model:[/bold] {cfg.model.name}   "
+        f"[bold]Voice:[/bold] {chosen_voice or '(model default)'}   "
+        f"[bold]Language:[/bold] "
+        f"{language_label(chosen_lang) if chosen_lang else '(model default)'}"
+    )
+    if chosen_lang and not caps.supports_language_code:
+        console.print(
+            "\n[yellow]This model ignores speech.language_code[/yellow] (native audio "
+            "picks the language itself). "
+            + (
+                "It is enforced through the system instruction instead:"
+                if cfg.speech.enforce_language_in_system_instruction
+                else "speech.enforce_language_in_system_instruction is false, so nothing "
+                "pins the language."
+            )
+        )
+        if cfg.speech.enforce_language_in_system_instruction:
+            console.print(f"[dim]{language_directive(chosen_lang)}[/dim]")
+
 
 
 # ---------------------------------------------------------------------------- tools

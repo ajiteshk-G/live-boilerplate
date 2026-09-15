@@ -97,10 +97,22 @@ def filter_for_model(cfg: AppConfig) -> tuple[AppConfig, list[str]]:
         out.thinking.budget = None
 
     if not caps.supports_language_code and out.speech.language_code:
-        warnings.append(
-            f"{cfg.model.name} is a native-audio model and detects language automatically; "
-            f"dropping speech.language_code={out.speech.language_code!r}."
-        )
-        out.speech.language_code = None
+        # The field itself is not accepted, but the requirement still is -- as a
+        # rule in the system instruction, which is Google's documented
+        # workaround for native-audio models.
+        if out.speech.enforce_language_in_system_instruction:
+            warnings.append(
+                f"{cfg.model.name} detects language automatically and ignores "
+                f"speech.language_code={out.speech.language_code!r}; enforcing it through "
+                "the system instruction instead."
+            )
+        else:
+            warnings.append(
+                f"{cfg.model.name} ignores speech.language_code="
+                f"{out.speech.language_code!r} and "
+                "speech.enforce_language_in_system_instruction is false, so the spoken "
+                "language is left entirely to the model."
+            )
+            out.speech.language_code = None
 
     return out, warnings

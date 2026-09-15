@@ -10,6 +10,10 @@ const state = {
   recorderNode: null,
   stream: null,
   micOn: false,
+  // A call is live from "Start call" until the session is torn down.
+  callActive: false,
+  // True once the user hung up, so onclose knows this was deliberate.
+  ended: false,
   turns: [],
   lastUser: null,
   lastModel: null,
@@ -23,7 +27,7 @@ function checkSecureContext() {
   if (window.isSecureContext) return true;
   el('insecure-banner').hidden = false;
   el('insecure-origin').textContent = window.location.origin;
-  el('mic-btn').disabled = true;
+  el('call-btn').disabled = true;
   return false;
 }
 
@@ -174,13 +178,27 @@ function connect() {
   const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
   ws.binaryType = 'arraybuffer';
   state.ws = ws;
+  state.ended = false;
 
-  ws.onopen = () => setStatus('Connected', 'ok');
+  // Resolves once the socket is usable, so startCall() can await it.
+  const ready = new Promise((resolve, reject) => {
+    ws.onopen = () => {
+      setStatus('Connected', 'ok');
+      resolve();
+    };
+    ws.onerror = () => {
+      setStatus('Connection error', 'bad');
+      reject(new Error('websocket error'));
+    };
+  });
+
   ws.onclose = () => {
-    setStatus('Disconnected', 'bad');
+    // A hang-up closes the socket too; do not report it as a failure.
+    setStatus(state.ended ? 'Call ended' : 'Disconnected', state.ended ? '' : 'bad');
     stopMic();
+    state.callActive = false;
+    setCallButton(false);
   };
-  ws.onerror = () => setStatus('Connection error', 'bad');
 
   ws.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
@@ -227,11 +245,18 @@ function connect() {
       case 'reconnecting':
         setStatus(`Reconnecting in ${msg.in_seconds}s`, 'warn');
         break;
+      case 'session_ended':
+        state.ended = true;
+        setStatus('Call ended', '');
+        logEvent('session', `call ended (${msg.reason || 'no reason given'})`);
+        break;
       case 'error':
         logEvent('error', msg.message, 'bad');
         break;
     }
   };
+
+  return ready;
 }
 
 // -------------------------------------------------------------------- audio
@@ -278,8 +303,6 @@ async function startMic() {
   source.connect(state.recorderNode);
 
   state.micOn = true;
-  el('mic-btn').classList.add('live');
-  el('mic-btn').textContent = 'Stop';
   setStatus('Listening', 'ok');
 }
 
@@ -294,18 +317,69 @@ function stopMic() {
     state.ws.send(JSON.stringify({ type: 'mic', on: false }));
   }
   state.micOn = false;
-  el('mic-btn').classList.remove('live');
-  el('mic-btn').textContent = 'Talk';
+}
+
+// ---------------------------------------------------------------------- call
+
+function setCallButton(live) {
+  const btn = el('call-btn');
+  btn.classList.toggle('live', live);
+  btn.textContent = live ? 'Stop call' : 'Start call';
+}
+
+// The Live session starts with the socket, so the socket is opened on demand:
+// merely loading the page should not start a billed session.
+async function ensureConnected() {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) return;
+  await connect();
+}
+
+async function startCall() {
+  await ensureConnected();
+  await startMic();
+  state.callActive = true;
+  setCallButton(true);
+}
+
+// Stop ends the CALL, not just the microphone: the server tears the Live
+// session down, so the model stops generating and billing stops with it.
+function endCall() {
+  state.ended = true;
+  state.callActive = false;
+  stopMic();
+  if (state.playerNode) state.playerNode.port.postMessage('flush');
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 'end_call' }));
+    // The server closes the socket once it has flushed the final usage; this
+    // is the backstop if it does not.
+    setTimeout(() => {
+      if (state.ws && state.ws.readyState <= WebSocket.OPEN) state.ws.close();
+    }, 1500);
+  } else if (state.ws) {
+    state.ws.close();
+  }
+  setCallButton(false);
+  setStatus('Call ended', '');
 }
 
 // --------------------------------------------------------------------- init
 
-el('mic-btn').addEventListener('click', async () => {
+el('call-btn').addEventListener('click', async () => {
   try {
-    if (state.micOn) stopMic();
-    else await startMic();
+    if (state.callActive) endCall();
+    else await startCall();
   } catch (err) {
-    logEvent('error', `microphone: ${err.message}`, 'bad');
+    logEvent('error', `call: ${err.message}`, 'bad');
+    state.callActive = false;
+    setCallButton(false);
+  }
+});
+
+// Closing the tab should hang up too, rather than leaving a session billing
+// until the server notices the dead socket.
+window.addEventListener('beforeunload', () => {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 'end_call' }));
   }
 });
 
@@ -313,11 +387,16 @@ el('text-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const input = el('text-input');
   const text = input.value.trim();
-  if (!text || !state.ws) return;
+  if (!text) return;
   try {
+    // Typing is a valid way to start (or restart) a session without the mic.
+    await ensureConnected();
     await initPlayback();
     if (state.playCtx) await state.playCtx.resume();
-  } catch (_) {}
+  } catch (err) {
+    logEvent('error', `send: ${err.message}`, 'bad');
+    return;
+  }
   state.ws.send(JSON.stringify({ type: 'text', text }));
   state.lastUser = null;
   state.lastModel = null;
@@ -349,7 +428,9 @@ async function loadMeta() {
   }
 }
 
-if (checkSecureContext()) {
-  connect();
-}
+// No eager connect: the Live session (and its billing) starts when the user
+// presses Start call or sends a message.
+checkSecureContext();
+setCallButton(false);
+setStatus('Idle · press Start call', '');
 loadMeta();

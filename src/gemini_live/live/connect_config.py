@@ -10,12 +10,18 @@ from __future__ import annotations
 from typing import Any
 
 from ..search.domain_policy import DomainPolicy
+from ..settings.capabilities import capabilities_for
 from ..settings.schema import AppConfig, normalize_domain
+from ..settings.voices import language_directive
 from ..tools.registry import ToolRegistry
 
 
 def build_system_instruction(cfg: AppConfig, policy: DomainPolicy) -> str:
     text = cfg.model.system_instruction.strip()
+    # Native-audio models ignore speech.language_code and pick a language
+    # themselves, so the language contract has to live in the prompt.
+    if cfg.speech.language_code and cfg.speech.enforce_language_in_system_instruction:
+        text = f"{text}\n{language_directive(cfg.speech.language_code)}"
     if cfg.search.inject_domain_rules_into_system_instruction:
         rules = policy.system_instruction_rules()
         if rules:
@@ -56,7 +62,9 @@ def build_live_config(
                 )
             )
         }
-        if cfg.speech.language_code:
+        if cfg.speech.language_code and capabilities_for(cfg.model.name).supports_language_code:
+            # Native-audio models reject this field; for them the language is
+            # carried by the system instruction (see build_system_instruction).
             speech["language_code"] = cfg.speech.language_code
         kwargs["speech_config"] = types.SpeechConfig(**speech)
 

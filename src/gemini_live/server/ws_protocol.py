@@ -6,14 +6,16 @@ telemetry. Simple enough to debug directly in devtools.
     -> server  binary   mic PCM16 mono @ 16 kHz
     -> server  {"type":"text","text":...}
     -> server  {"type":"mic","on":false}        triggers audio_stream_end
+    -> server  {"type":"end_call"}              hangs up: closes the Live session
     <- client  binary   model PCM16 mono @ 24 kHz
     <- client  {"type":"transcript"|"usage_turn"|"citations"|"interrupted"|...}
+    <- client  {"type":"session_ended","reason":...}
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Protocol
 
 
 def encode_event(kind: str, payload: dict[str, Any]) -> str:
@@ -29,3 +31,32 @@ def decode_client_message(raw: str) -> dict[str, Any]:
         return {"type": "unknown"}
     data.setdefault("type", "unknown")
     return data
+
+
+class _RunnerLike(Protocol):
+    """The slice of ``LiveSessionRunner`` this module needs."""
+
+    uplink: Any
+
+    async def close(self) -> None: ...
+
+
+async def apply_client_message(payload: dict[str, Any], runner: _RunnerLike) -> bool:
+    """Apply one decoded client message.
+
+    Returns False when the client hung up, so the caller stops relaying. Kept
+    here rather than inline in the endpoint so the control protocol is testable
+    without a live socket.
+    """
+    kind = payload.get("type")
+    if kind == "text" and payload.get("text"):
+        await runner.uplink.text(str(payload["text"]))
+    elif kind == "mic" and payload.get("on") is False:
+        await runner.uplink.mic_off()
+    elif kind == "end_call":
+        # Stop means stop: end the Live session rather than just muting, so the
+        # model stops generating and the session stops being billed.
+        await runner.close()
+        return False
+    return True
+
