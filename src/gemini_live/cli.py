@@ -375,7 +375,13 @@ def selftest(
         "--prompt",
     ),
 ) -> None:
-    """Headless TEXT session that exercises the tool loop and token reporting."""
+    """Run one scripted turn against the real backend, without mic or browser.
+
+    This is a live, billed session -- not an offline test (that is `pytest`).
+    It exercises the whole stack end to end: auth, tool ingest and curation,
+    the function-call loop, and per-turn token accounting. Output is read as
+    text where the model supports it and as transcription where it does not.
+    """
     cfg = _load(config)
     _setup_logging(cfg)
     _make_headless(cfg)
