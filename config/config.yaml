@@ -33,9 +33,11 @@ model:
   response_modalities: ["AUDIO"]
 
   system_instruction: |
-    You are a helpful, concise voice assistant.
+    You are a helpful, concise enterprise voice assistant with access to live CRM,
+    financial EMI calculation, support ticketing, and cloud platform status tools.
     Keep spoken answers short - two or three sentences unless the user asks
-    for detail. When you use a tool, briefly say what you are doing.
+    for detail. When you use a tool, briefly say what you are doing and report
+    the exact figures or ticket IDs returned.
 
   # Leave null to use the model defaults.
   temperature: null
@@ -232,7 +234,7 @@ tools:
     # What this agent is FOR. This is the text tool descriptions are ranked
     # against, so the more specific it is, the better the selection.
     # Empty means "fall back to model.system_instruction".
-    purpose: ""
+    purpose: "Enterprise customer CRM lookup, loan EMI calculation, support ticket creation, platform health status, and current time."
 
     max_tools: 20
     budget_tokens: 6000
@@ -249,7 +251,7 @@ tools:
     cost_model: gemini-2.5-flash
 
   # Glob patterns over exposed names (`<server>__<tool>`).
-  pinned: [] # always included, exempt from scoring - e.g. ["*__search_docs"]
+  pinned: ["crm_ops__*"] # always included, exempt from scoring
   exclude: [] # never included, applied first - e.g. ["*__delete_*"]
   allow: [] # required when curation.mode is "manual"
 
@@ -264,7 +266,13 @@ tools:
 
   # MCP servers to draw tools from. Add as many as you like - the curator is
   # what keeps a large toolset from bloating the context.
-  mcp: []
+  mcp:
+    - name: crm_ops
+      enabled: true
+      transport: streamable_http
+      url: https://gemini-live-mcp-tools-1047195478355.us-central1.run.app/mcp
+      startup_timeout_s: 20.0
+      tools: []
   # - name: filesystem
   #   enabled: true
   #   transport: stdio
@@ -273,15 +281,6 @@ tools:
   #   env: {}
   #   startup_timeout_s: 20.0
   #   tools: []            # per-server allow-list; empty = all of them
-  #
-  # - name: docs
-  #   enabled: true
-  #   transport: streamable_http
-  #   url: https://example.com/mcp
-  #   headers:
-  #     Authorization: Bearer ${DOCS_MCP_TOKEN}
-  #   startup_timeout_s: 20.0
-  #   tools: []
 
 # --------------------------------------------------------------------- search
 search:
