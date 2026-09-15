@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..live.client import build_client
-from ..live.runner import LiveSessionRunner
+from ..live.runner import INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, LiveSessionRunner
 from ..pipeline import ToolPipeline, ToolPipelineResult
 from ..settings.capabilities import filter_for_model
 from ..settings.schema import AppConfig, redact
@@ -122,8 +122,13 @@ def create_app(cfg: AppConfig) -> FastAPI:
             "domains": {
                 "allow": cfg.search.domains.allow,
                 "deny": cfg.search.domains.deny,
-                "enforcement": cfg.search.enforcement,
                 "google_search": cfg.search.google_search.enabled,
+            },
+            # The wire format is fixed by the Live API. Serving it keeps the
+            # browser from keeping its own copy that can drift.
+            "audio": {
+                "input_sample_rate": INPUT_SAMPLE_RATE,
+                "output_sample_rate": OUTPUT_SAMPLE_RATE,
             },
         }
         return JSONResponse(summary)

@@ -12,9 +12,10 @@
   <strong>Microphone blocked: insecure origin.</strong>
   <p>
     <code id="insecure-origin"></code> is not a secure context, so Chrome will not grant
-    microphone access. Use an SSH port-forward and open <code>http://localhost:8080</code>:
+    microphone access. Use an SSH port-forward and open
+    <code id="secure-url">http://localhost</code>:
   </p>
-  <pre>ssh -L 8080:localhost:8080 ajiteshk.c.googlers.com</pre>
+  <pre id="ssh-hint"></pre>
   <p class="muted">Alternatives: run with <code>--ssl-certfile/--ssl-keyfile</code>, or launch Chrome with
   <code>--unsafely-treat-insecure-origin-as-secure=&lt;origin&gt;</code>.</p>
 </div>

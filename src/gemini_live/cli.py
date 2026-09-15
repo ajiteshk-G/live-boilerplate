@@ -463,14 +463,14 @@ def calibrate_tools(config: str = typer.Option(DEFAULT_CONFIG, "--config", "-c")
         console.print(f"\nTools called after resume: {called or '(none)'}")
         if "probe_beta" in called:
             console.print(
-                "[green]VERDICT: the new tool list IS honoured on resume. "
-                "tools.adaptive.enabled is safe to turn on.[/green]"
+                "[green]VERDICT: the new tool list IS honoured on resume, so you can "
+                "re-curate tools by reconnecting with the resumption handle.[/green]"
             )
         else:
             console.print(
-                "[yellow]VERDICT: the new tool list was NOT honoured. "
-                "Keep tools.adaptive.enabled = false and reconnect without a handle "
-                "when the tool set changes.[/yellow]"
+                "[yellow]VERDICT: the new tool list was NOT honoured. To change the "
+                "tool set you must reconnect WITHOUT a handle, which loses the "
+                "conversation - so curate up front instead.[/yellow]"
             )
 
     asyncio.run(run())

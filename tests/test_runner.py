@@ -568,3 +568,71 @@ async def test_setup_failure_stops_after_max_retries_instead_of_looping_forever(
     assert len(sink.of_kind("connected")) == 4
     assert len(sink.of_kind("reconnecting")) == 3
 
+
+class _AlwaysFailingSession:
+    async def receive(self):
+        if False:
+            yield None
+        raise RuntimeError("1011 transient server hiccup before first message")
+
+
+def _reconnect_cfg(**reconnect: Any) -> AppConfig:
+    return AppConfig.model_validate(
+        {
+            "vertex": {"project": "p"},
+            "session": {"resumption": {"enabled": True}, "reconnect": reconnect},
+            "usage": {"log_path": None, "log_raw_snapshots": False},
+            "search": {"google_search": {"enabled": False}, "log_violations": None},
+        }
+    )
+
+
+async def test_reconnect_attempt_limit_comes_from_config(monkeypatch):
+    """The retry ceiling must be a config knob, not a literal in the runner."""
+    import asyncio
+
+    import pytest
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    cfg = _reconnect_cfg(max_attempts=1)
+    client = FakeClient(*[_AlwaysFailingSession() for _ in range(5)])
+    sink = CollectingSink()
+    runner = LiveSessionRunner(cfg, client, ToolRegistry([]), sink=sink)
+
+    with pytest.raises(RuntimeError, match="1011 transient"):
+        await runner.run()
+
+    # 1 initial connect + 1 permitted retry, then give up.
+    assert len(sink.of_kind("connected")) == 2
+    assert len(sink.of_kind("reconnecting")) == 1
+
+
+async def test_reconnect_backoff_follows_configured_bounds(monkeypatch):
+    """Backoff starts at initial_backoff_seconds and is capped, both from config."""
+    import asyncio
+
+    import pytest
+
+    delays: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+
+    cfg = _reconnect_cfg(max_attempts=4, initial_backoff_seconds=0.5, max_backoff_seconds=2.0)
+    client = FakeClient(*[_AlwaysFailingSession() for _ in range(6)])
+    sink = CollectingSink()
+    runner = LiveSessionRunner(cfg, client, ToolRegistry([]), sink=sink)
+
+    with pytest.raises(RuntimeError, match="1011 transient"):
+        await runner.run()
+
+    # 0.5, 1.0, 2.0, then held at the 2.0 cap rather than doubling to 4.0.
+    assert delays == [0.5, 1.0, 2.0, 2.0]
+
+

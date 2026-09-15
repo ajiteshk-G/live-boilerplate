@@ -191,14 +191,12 @@ An allow-list here is enforced in three layers, and you should know the strength
 | Generated system-instruction rules | Advisory — the model usually complies, but may not. |
 | Post-hoc audit of grounding citations | Detects violations. Does **not** prevent them. |
 
-The gap that matters: grounding metadata can arrive *after* audio playback has already started, so in the default `audit` mode the model may finish speaking a non-approved source before the violation is logged. Violations land in `logs/violations.jsonl` and appear in the UI.
+The gap that matters: grounding metadata can arrive *after* audio playback has already started, so the model may finish speaking a non-approved source before the violation is logged. Violations land in `logs/violations.jsonl` and appear in the UI.
 
-If that is unacceptable for your use case, opt into buffering:
-
-```yaml
-search:
-  enforcement: strict_buffered   # holds audio until citations clear; adds latency
-```
+> [!IMPORTANT]
+> There is **no gating mode**. This boilerplate deliberately does not offer one, rather than offer a knob that does not work. Buffering audio until citations clear would mean holding back every response for metadata that may never arrive, which turns a conversation into a series of long pauses.
+>
+> If a source must never reach the user, put it in `domains.deny` — that is mirrored into `exclude_domains` and enforced server-side. If you need a hard gate on an allow-list, build it on the text path where you can inspect before you speak.
 
 Citations whose real hostname cannot be recovered — Vertex returns opaque redirect URIs — are reported as `UNKNOWN` rather than being quietly counted as allowed.
 

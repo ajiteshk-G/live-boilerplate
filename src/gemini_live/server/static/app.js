@@ -1,5 +1,8 @@
-const INPUT_RATE = 16000;
-const OUTPUT_RATE = 24000;
+// Defaults matching the Live API wire format. /api/config is authoritative and
+// overwrites these before any AudioContext is created; see loadMeta().
+const audio = { inputRate: 16000, outputRate: 24000 };
+// Resolves once /api/config has been applied. Assigned during init below.
+let metaReady = null;
 
 const el = (id) => document.getElementById(id);
 const state = {
@@ -21,12 +24,17 @@ const state = {
 
 // ---------------------------------------------------------------- secure ctx
 
-// getUserMedia requires a secure context. http://<host>.c.googlers.com:8080 is
-// NOT secure, so the mic would be blocked with no obvious explanation. Say so.
+// getUserMedia requires a secure context. Serving over plain http:// from a
+// remote host is NOT secure, so the mic would be blocked with no obvious
+// explanation. Say so, and spell out the tunnel for THIS host and port.
 function checkSecureContext() {
   if (window.isSecureContext) return true;
+  const loc = window.location;
+  const port = loc.port || (loc.protocol === 'https:' ? '443' : '80');
   el('insecure-banner').hidden = false;
-  el('insecure-origin').textContent = window.location.origin;
+  el('insecure-origin').textContent = loc.origin;
+  el('secure-url').textContent = `http://localhost:${port}`;
+  el('ssh-hint').textContent = `ssh -L ${port}:localhost:${port} ${loc.hostname}`;
   el('call-btn').disabled = true;
   return false;
 }
@@ -290,7 +298,10 @@ function playPcm(buffer) {
 
 async function initPlayback() {
   if (state.playCtx) return;
-  state.playCtx = new AudioContext({ sampleRate: OUTPUT_RATE });
+  // The rates come from the server; creating a context before they land would
+  // bake in the fallback and resample everything.
+  await metaReady;
+  state.playCtx = new AudioContext({ sampleRate: audio.outputRate });
   await state.playCtx.audioWorklet.addModule('/static/player-worklet.js');
   state.playerNode = new AudioWorkletNode(state.playCtx, 'player-processor');
   state.playerNode.connect(state.playCtx.destination);
@@ -303,7 +314,7 @@ async function startMic() {
   state.stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });
-  state.micCtx = new AudioContext({ sampleRate: INPUT_RATE });
+  state.micCtx = new AudioContext({ sampleRate: audio.inputRate });
   await state.micCtx.audioWorklet.addModule('/static/recorder-worklet.js');
 
   const source = state.micCtx.createMediaStreamSource(state.stream);
@@ -420,6 +431,10 @@ async function loadMeta() {
   try {
     const res = await fetch('/api/config');
     const data = await res.json();
+    if (data.audio) {
+      audio.inputRate = data.audio.input_sample_rate;
+      audio.outputRate = data.audio.output_sample_rate;
+    }
     el('model-name').textContent = data.config.model.name;
     el('tool-count').textContent =
       `${data.tools.selected.length} of ${data.tools.catalog_size}`;
@@ -444,4 +459,4 @@ async function loadMeta() {
 checkSecureContext();
 setCallButton(false);
 setStatus('Idle · press Start call', '');
-loadMeta();
+metaReady = loadMeta();

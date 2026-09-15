@@ -170,11 +170,16 @@ session:
   resumption:
     enabled: true
 
-  max_duration_minutes: 30
+  # Applies only when resumption is on - without a handle, reconnecting would
+  # silently lose the conversation. max_attempts counts CONSECUTIVE failures
+  # and resets as soon as a reconnected session produces output.
+  reconnect:
+    max_attempts: 3
+    initial_backoff_seconds: 2.0
+    max_backoff_seconds: 8.0
 
 # ---------------------------------------------------------------------- media
 media:
-  enable_video_input: false
   resolution: MEDIA_RESOLUTION_LOW # LOW | MEDIUM | HIGH
 
 # ---------------------------------------------------------------------- usage
@@ -193,13 +198,6 @@ usage:
   log_path: ./logs/usage.jsonl
   log_raw_snapshots: true
   show_in_ui: true
-
-  report:
-    per_turn: true
-    session_total: true
-    by_modality: true
-    context_growth: true
-    cost_drivers: true
 
   # Set any entry to null to disable that alert.
   alerts:
@@ -255,12 +253,9 @@ tools:
   exclude: [] # never included, applied first - e.g. ["*__delete_*"]
   allow: [] # required when curation.mode is "manual"
 
-  # Re-selecting tools mid-conversation requires a reconnect, and how session
-  # resumption interacts with a CHANGED tool list is undocumented. Off until
-  # you have verified it with `uv run glive calibrate-tools`.
-  adaptive:
-    enabled: false
-    reselect_on_tool_miss: true
+  # NOTE: the tool list is frozen at `setup` - the Live protocol has no
+  # mid-session tool update, so changing it means reconnecting and losing or
+  # resuming the conversation. Curate well up front instead.
 
   # Local in-process tools, always available without an MCP server.
   builtins:
@@ -298,20 +293,19 @@ search:
 
   domains:
     # There is NO native allow-list field in the Live API. Entries here are
-    # enforced by (a) system-instruction rules and (b) a post-hoc audit of
-    # grounding metadata. See `enforcement` below for what that does and does
-    # not guarantee.
+    # enforced by (a) system-instruction rules and (b) a post-hoc AUDIT of
+    # grounding metadata.
+    #
+    # Be clear about what that does NOT give you: the audit runs after the
+    # model has already spoken, so a non-approved source can be heard before
+    # it is logged. Treat the allow-list as a strong steer plus an audit
+    # trail, not as a gate. Use `deny` for anything that must never appear -
+    # it is mirrored into exclude_domains and enforced server-side.
     allow: []
     # allow: ["cloud.google.com", "ai.google.dev", "github.com"]
 
     # Mirrored into google_search.exclude_domains, which IS server-enforced.
     deny: []
-
-  # audit           - log allow-list violations after the fact. The model may
-  #                   already have spoken a non-approved source. Zero latency.
-  # strict_buffered - hold audio until citations are checked. Adds latency,
-  #                   but nothing disallowed reaches the speaker.
-  enforcement: audit
 
   inject_domain_rules_into_system_instruction: true
   log_violations: ./logs/violations.jsonl
@@ -320,7 +314,12 @@ search:
 server:
   host: 127.0.0.1
   port: 8080
-  # Chrome only grants microphone access in a SECURE CONTEXT. Reach the UI at
-  # http://localhost:8080 via an SSH tunnel, not at the cloudtop hostname:
-  #   ssh -L 8080:localhost:8080 ajiteshk.c.googlers.com
-  cors_origins: ["http://localhost:8080"]
+  # Chrome only grants microphone access in a SECURE CONTEXT. If you run this
+  # on a remote box, reach it through an SSH tunnel so the browser sees
+  # localhost - the UI prints the exact command if it detects an insecure
+  # origin.
+  #   ssh -L <port>:localhost:<port> <your-host>
+  #
+  # Empty means "http://localhost:<port> and http://127.0.0.1:<port>", derived
+  # from `port` above. List origins explicitly to widen it.
+  cors_origins: []

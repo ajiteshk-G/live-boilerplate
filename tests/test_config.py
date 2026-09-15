@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from gemini_live.settings.capabilities import capabilities_for, filter_for_model
 from gemini_live.settings.loader import ConfigError, load_config
@@ -332,3 +333,52 @@ def test_shipped_minimal_config_is_valid(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
     cfg = load_config("config/config.minimal.yaml", env_file=None)
     assert cfg.model.response_modalities == ["AUDIO"]
+
+
+# ------------------------------------------------------------------ cors / ports
+
+
+def test_cors_origins_default_follows_the_configured_port():
+    """A hardcoded port here would silently break CORS for anyone who moves the
+    server off 8080, which is a miserable failure to diagnose."""
+    cfg = AppConfig.model_validate({"vertex": {"project": "p"}, "server": {"port": 9111}})
+
+    assert cfg.server.cors_origins == [
+        "http://localhost:9111",
+        "http://127.0.0.1:9111",
+    ]
+
+
+def test_explicit_cors_origins_are_left_alone():
+    cfg = AppConfig.model_validate(
+        {
+            "vertex": {"project": "p"},
+            "server": {"port": 9111, "cors_origins": ["https://example.com"]},
+        }
+    )
+
+    assert cfg.server.cors_origins == ["https://example.com"]
+
+
+# ------------------------------------------------------- no aspirational knobs
+
+# These keys were once declared and documented but never read by any code.
+# `extra="forbid"` now rejects them, which is the point: a config that promises
+# behaviour it does not implement is worse than one that omits it. Most of all
+# `search.enforcement: strict_buffered`, which advertised a citation gate that
+# did not exist.
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"session": {"max_duration_minutes": 30}},
+        {"media": {"enable_video_input": True}},
+        {"tools": {"adaptive": {"enabled": True}}},
+        {"usage": {"report": {"per_turn": True}}},
+        {"search": {"enforcement": "strict_buffered"}},
+    ],
+)
+def test_removed_dead_keys_are_rejected_not_silently_ignored(payload):
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate({"vertex": {"project": "p"}, **payload})

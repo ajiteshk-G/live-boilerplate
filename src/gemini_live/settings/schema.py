@@ -156,26 +156,33 @@ class ResumptionSection(_Base):
     enabled: bool = True
 
 
+class ReconnectSection(_Base):
+    """How hard to try when a live socket drops mid-call.
+
+    Reconnects only happen when `resumption.enabled` is true; without a
+    resumption handle a reconnect would silently lose the conversation.
+    """
+
+    max_attempts: int = 3
+    """Consecutive failures tolerated. The counter resets once a reconnected
+    session actually produces output, so a long call is not capped at this
+    many drops in total."""
+
+    initial_backoff_seconds: float = 2.0
+    max_backoff_seconds: float = 8.0
+
+
 class SessionSection(_Base):
     context_window_compression: CompressionSection = CompressionSection()
     resumption: ResumptionSection = ResumptionSection()
-    max_duration_minutes: int = 30
+    reconnect: ReconnectSection = ReconnectSection()
 
 
 class MediaSection(_Base):
-    enable_video_input: bool = False
     resolution: str | None = "MEDIA_RESOLUTION_LOW"
 
 
 # ------------------------------------------------------------------------- usage
-
-
-class UsageReportSection(_Base):
-    per_turn: bool = True
-    session_total: bool = True
-    by_modality: bool = True
-    context_growth: bool = True
-    cost_drivers: bool = True
 
 
 class UsageAlertsSection(_Base):
@@ -201,7 +208,6 @@ class UsageSection(_Base):
     log_path: str | None = "./logs/usage.jsonl"
     log_raw_snapshots: bool = True
     show_in_ui: bool = True
-    report: UsageReportSection = UsageReportSection()
     alerts: UsageAlertsSection = UsageAlertsSection()
     pricing: PricingSection | None = None
 
@@ -257,11 +263,6 @@ class CurationSection(_Base):
         return v
 
 
-class AdaptiveSection(_Base):
-    enabled: bool = False
-    reselect_on_tool_miss: bool = True
-
-
 class BuiltinToolConfig(_Base):
     enabled: bool = True
 
@@ -271,7 +272,6 @@ class ToolsSection(_Base):
     pinned: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=list)
     allow: list[str] = Field(default_factory=list)
-    adaptive: AdaptiveSection = AdaptiveSection()
     builtins: dict[str, BuiltinToolConfig] = Field(default_factory=dict)
     mcp: list[McpServerConfig] = Field(default_factory=list)
 
@@ -306,7 +306,6 @@ class SearchDomains(_Base):
 class SearchSection(_Base):
     google_search: GoogleSearchSection = GoogleSearchSection()
     domains: SearchDomains = SearchDomains()
-    enforcement: Literal["audit", "strict_buffered"] = "audit"
     inject_domain_rules_into_system_instruction: bool = True
     log_violations: str | None = "./logs/violations.jsonl"
 
@@ -314,7 +313,20 @@ class SearchSection(_Base):
 class ServerSection(_Base):
     host: str = "127.0.0.1"
     port: int = 8080
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:8080"])
+    cors_origins: list[str] = Field(default_factory=list)
+    """Empty means "derive from `port`" - see `_default_cors`. Set explicitly
+    to allow other origins."""
+
+    @model_validator(mode="after")
+    def _default_cors(self) -> ServerSection:
+        # Hardcoding a port here would silently break CORS for anyone who
+        # changes `port`, which is a confusing failure to debug.
+        if not self.cors_origins:
+            self.cors_origins = [
+                f"http://localhost:{self.port}",
+                f"http://127.0.0.1:{self.port}",
+            ]
+        return self
 
 
 # --------------------------------------------------------------------------- root

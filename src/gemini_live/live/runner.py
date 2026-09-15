@@ -219,13 +219,17 @@ class LiveSessionRunner:
                     if self._received_any:
                         attempts = 0
                     attempts += 1
-                    if not self._cfg.session.resumption.enabled or attempts > 3:
+                    rc = self._cfg.session.reconnect
+                    if not self._cfg.session.resumption.enabled or attempts > rc.max_attempts:
                         await self._sink.event(
                             "error", {"message": f"{type(exc).__name__}: {exc}"}
                         )
                         raise
                     self.uplink.drain_audio()
-                    delay = min(2**attempts, 8)
+                    delay = min(
+                        rc.initial_backoff_seconds * 2 ** (attempts - 1),
+                        rc.max_backoff_seconds,
+                    )
                     log.warning("live session dropped (%s); reconnecting in %ss", exc, delay)
                     await self._sink.event(
                         "reconnecting", {"in_seconds": delay, "reason": str(exc)}
