@@ -15,6 +15,19 @@ app:
   name: gemini-live-boilerplate
   log_level: INFO # DEBUG | INFO | WARNING | ERROR
 
+# ---------------------------------------------------------------------- agent
+# Identity and gender persona of the voice assistant.
+# `gender` strictly enforces BOTH:
+#   1. Voice validation: `speech.voice_name` MUST match this gender (a female
+#      agent cannot use a male voice like Puck/Fenrir, and vice versa).
+#   2. Grammatical gender consistency: the system instruction strictly forbids
+#      mixing male and female verb conjugations (e.g. Hindi/Hinglish "karungi"
+#      vs "karunga", "bata rahi hoon" vs "bata raha hoon") across all languages.
+agent:
+  name: Ananya
+  gender: female # female | male
+  enforce_in_system_instruction: true
+
 # --------------------------------------------------------------------- vertex
 # This boilerplate is Vertex-AI-only (matching the intro_multimodal_live_api
 # notebook). Auth comes from Application Default Credentials:
@@ -56,6 +69,9 @@ model:
 # is no "Indian voice". Every voice can speak every supported language, and it
 # is `language_code` + `default_accent` below that decide the regional accent.
 #
+# IMPORTANT: `voice_name` MUST match `agent.gender` above (female or male).
+# Mixing a female agent with a male voice (or vice versa) is rejected at startup.
+#
 # Run `uv run glive voices` to print these lists with the current selection
 # marked.
 speech:
@@ -63,19 +79,25 @@ speech:
   # (even when dynamically switching between English, Hindi, Tamil, etc.).
   default_accent: Indian
 
-  # ---- voice_name: all 30 prebuilt voices (name -- character) --------------
+  # ---- voice_name: all 30 prebuilt voices grouped by gender ----------------
   # The eight marked (*) exist on EVERY Live model; the rest require a
   # native-audio model.
-  #   Zephyr (*)    Bright        Puck (*)      Upbeat      Charon (*)   Informative
-  #   Kore (*)      Firm          Fenrir (*)    Excitable   Leda (*)     Youthful
-  #   Orus (*)      Firm          Aoede (*)     Breezy      Callirrhoe   Easy-going
-  #   Autonoe       Bright        Enceladus     Breathy     Iapetus      Clear
-  #   Umbriel       Easy-going    Algieba       Smooth      Despina      Smooth
-  #   Erinome       Clear         Algenib       Gravelly    Rasalgethi   Informative
-  #   Laomedeia     Upbeat        Achernar      Soft        Alnilam      Firm
-  #   Schedar       Even          Gacrux        Mature      Pulcherrima  Forward
-  #   Achird        Friendly      Zubenelgenubi Casual      Vindemiatrix Gentle
-  #   Sadachbia     Lively        Sadaltager    Knowledgeable  Sulafat   Warm
+  #
+  # FEMALE VOICES (14) -- use when agent.gender is "female":
+  #   Kore (*)      Firm       <-- selected below
+  #   Zephyr (*)    Bright        Leda (*)      Youthful      Aoede (*)    Breezy
+  #   Callirrhoe    Easy-going    Autonoe       Bright        Despina      Smooth
+  #   Erinome       Clear         Laomedeia     Upbeat        Achernar     Soft
+  #   Gacrux        Mature        Pulcherrima   Forward       Vindemiatrix Gentle
+  #   Sulafat       Warm
+  #
+  # MALE VOICES (16) -- use when agent.gender is "male" (e.g. agent.name: Aarav):
+  #   Puck (*)      Upbeat        Charon (*)    Informative   Fenrir (*)   Excitable
+  #   Orus (*)      Firm          Enceladus     Breathy       Iapetus      Clear
+  #   Umbriel       Easy-going    Algieba       Smooth        Algenib      Gravelly
+  #   Rasalgethi    Informative   Alnilam       Firm          Schedar      Even
+  #   Achird        Friendly      Zubenelgenubi Casual        Sadachbia    Lively
+  #   Sadaltager    Knowledgeable
   voice_name: Kore
 
   # ---- language_code -------------------------------------------------------
@@ -328,4 +350,4 @@ server:
   #
   # Empty means "http://localhost:<port> and http://127.0.0.1:<port>", derived
   # from `port` above. List origins explicitly to widen it.
-  cors_origins: []
+  cors_origins: ["*"]

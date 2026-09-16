@@ -12,12 +12,16 @@ from typing import Any
 from ..search.domain_policy import DomainPolicy
 from ..settings.capabilities import capabilities_for
 from ..settings.schema import AppConfig, normalize_domain
-from ..settings.voices import language_directive
+from ..settings.voices import agent_identity_directive, language_directive
 from ..tools.registry import ToolRegistry
 
 
 def build_system_instruction(cfg: AppConfig, policy: DomainPolicy) -> str:
     text = cfg.model.system_instruction.strip()
+    if cfg.agent.enforce_in_system_instruction and (
+        "agent" in cfg.model_fields_set or cfg.speech.language_code is not None
+    ):
+        text = f"{text}\n{agent_identity_directive(cfg.agent.name, cfg.agent.gender)}"
     if cfg.model.talk_only_about and cfg.model.talk_only_about.strip():
         topic = cfg.model.talk_only_about.strip()
         text = (

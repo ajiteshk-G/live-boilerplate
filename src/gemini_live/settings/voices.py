@@ -58,6 +58,47 @@ LIVE_VOICES: dict[str, str] = {
 }
 """All 30 prebuilt voices, mapped to the characteristic Google documents."""
 
+VOICE_GENDERS: dict[str, str] = {
+    "Zephyr": "female",
+    "Puck": "male",
+    "Charon": "male",
+    "Kore": "female",
+    "Fenrir": "male",
+    "Leda": "female",
+    "Orus": "male",
+    "Aoede": "female",
+    "Callirrhoe": "female",
+    "Autonoe": "female",
+    "Enceladus": "male",
+    "Iapetus": "male",
+    "Umbriel": "male",
+    "Algieba": "male",
+    "Despina": "female",
+    "Erinome": "female",
+    "Algenib": "male",
+    "Rasalgethi": "male",
+    "Laomedeia": "female",
+    "Achernar": "female",
+    "Alnilam": "male",
+    "Schedar": "male",
+    "Gacrux": "female",
+    "Pulcherrima": "female",
+    "Achird": "male",
+    "Zubenelgenubi": "male",
+    "Vindemiatrix": "female",
+    "Sadachbia": "male",
+    "Sadaltager": "male",
+    "Sulafat": "female",
+}
+"""Every prebuilt voice mapped to its vocal gender ('female' or 'male')."""
+
+FEMALE_VOICES: frozenset[str] = frozenset(
+    name for name, gender in VOICE_GENDERS.items() if gender == "female"
+)
+MALE_VOICES: frozenset[str] = frozenset(
+    name for name, gender in VOICE_GENDERS.items() if gender == "male"
+)
+
 CORE_VOICES: frozenset[str] = frozenset(
     {"Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"}
 )
@@ -73,6 +114,49 @@ _VOICES_BY_LOWER = {name.lower(): name for name in LIVE_VOICES}
 def canonical_voice(name: str) -> str | None:
     """``"kore"`` -> ``"Kore"``. None if the voice does not exist."""
     return _VOICES_BY_LOWER.get(name.strip().lower())
+
+
+def voice_gender(name: str | None) -> str | None:
+    """Return ``'female'`` or ``'male'`` for a prebuilt voice name, or None."""
+    if not name:
+        return None
+    canon = canonical_voice(name)
+    return VOICE_GENDERS.get(canon) if canon else None
+
+
+def agent_identity_directive(name: str, gender: str) -> str:
+    """Build system-instruction rules enforcing agent name and strict gender consistency."""
+    clean_gender = gender.strip().lower()
+    clean_name = name.strip() or ("Ananya" if clean_gender == "female" else "Aarav")
+    if clean_gender == "female":
+        return (
+            f'AGENT IDENTITY & GENDER: Your name is "{clean_name}" and your gender is '
+            f'strictly FEMALE. Always introduce yourself as "{clean_name}" when greeting '
+            "the user or when asked your name.\n"
+            "CRITICAL - DO NOT MIX MALE AND FEMALE: You must NEVER mix male and female "
+            "personas, pronouns, or grammatical forms. In languages with gendered grammar "
+            "(especially Hindi, Hinglish, Marathi, Gujarati, Punjabi, Urdu, and other Indian "
+            "languages), you MUST strictly and consistently use FEMALE first-person verb "
+            "conjugations, participles, and adjectives for yourself in EVERY sentence "
+            '(for example, in Hindi/Hinglish ALWAYS say "karungi", "dekhti hoon", '
+            '"bata rahi hoon", "check karti hoon", "main samajh gayi" — NEVER use male forms '
+            'like "karunga", "dekhta hoon", "bata raha hoon", or "main samajh gaya"). '
+            "Maintain your female persona and grammar even when speaking to a male user."
+        )
+    return (
+        f'AGENT IDENTITY & GENDER: Your name is "{clean_name}" and your gender is '
+        f'strictly MALE. Always introduce yourself as "{clean_name}" when greeting '
+        "the user or when asked your name.\n"
+        "CRITICAL - DO NOT MIX MALE AND FEMALE: You must NEVER mix male and female "
+        "personas, pronouns, or grammatical forms. In languages with gendered grammar "
+        "(especially Hindi, Hinglish, Marathi, Gujarati, Punjabi, Urdu, and other Indian "
+        "languages), you MUST strictly and consistently use MALE first-person verb "
+        "conjugations, participles, and adjectives for yourself in EVERY sentence "
+        '(for example, in Hindi/Hinglish ALWAYS say "karunga", "dekhta hoon", '
+        '"bata raha hoon", "check karta hoon", "main samajh gaya" — NEVER use female forms '
+        'like "karungi", "dekhti hoon", "bata rahi hoon", or "main samajh gayi"). '
+        "Maintain your male persona and grammar even when speaking to a female user."
+    )
 
 
 # ------------------------------------------------------------------ languages

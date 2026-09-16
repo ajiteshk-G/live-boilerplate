@@ -14,9 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .voices import (
     LIVE_VOICES,
+    VOICE_GENDERS,
     canonical_voice,
     is_supported_language,
     resolve_client_locale,
+    voice_gender,
 )
 
 
@@ -30,6 +32,21 @@ class _Base(BaseModel):
 class AppSection(_Base):
     name: str = "gemini-live-boilerplate"
     log_level: str = "INFO"
+
+
+class AgentSection(_Base):
+    """Identity and gender persona of the voice assistant."""
+
+    name: str = "Ananya"
+    gender: Literal["female", "male"] = "female"
+    enforce_in_system_instruction: bool = True
+
+    @field_validator("gender", mode="before")
+    @classmethod
+    def _norm_gender(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
 
 
 class VertexSection(_Base):
@@ -340,6 +357,7 @@ class ServerSection(_Base):
 
 class AppConfig(_Base):
     app: AppSection = AppSection()
+    agent: AgentSection = AgentSection()
     vertex: VertexSection
     model: ModelSection = ModelSection()
     speech: SpeechSection = SpeechSection()
@@ -364,6 +382,37 @@ class AppConfig(_Base):
             raise ValueError(
                 "Set thinking.level (Gemini 3.x models) OR thinking.budget (2.5 models), not both."
             )
+        # Enforce strict gender consistency between agent.gender and speech.voice_name
+        # so male and female voices/personas are never mixed.
+        agent_gender_explicit = (
+            "agent" in self.model_fields_set and "gender" in self.agent.model_fields_set
+        )
+        voice_explicit = (
+            "speech" in self.model_fields_set and "voice_name" in self.speech.model_fields_set
+        )
+        v_gender = voice_gender(self.speech.voice_name)
+
+        if agent_gender_explicit and voice_explicit and v_gender and v_gender != self.agent.gender:
+            allowed = sorted(k for k, g in VOICE_GENDERS.items() if g == self.agent.gender)
+            raise ValueError(
+                f"Gender mismatch: agent.gender is {self.agent.gender!r} "
+                f"(agent.name={self.agent.name!r}), but speech.voice_name="
+                f"{self.speech.voice_name!r} is a {v_gender} voice. "
+                f"Male and female cannot be mixed. Choose a {self.agent.gender} voice "
+                f"from: {', '.join(allowed[:8])}..."
+            )
+        if agent_gender_explicit and not voice_explicit and v_gender != self.agent.gender:
+            self.speech.voice_name = "Kore" if self.agent.gender == "female" else "Puck"
+        elif (
+            voice_explicit
+            and not agent_gender_explicit
+            and v_gender
+            and v_gender != self.agent.gender
+        ):
+            self.agent.gender = v_gender  # type: ignore[assignment]
+            if "name" not in self.agent.model_fields_set:
+                self.agent.name = "Ananya" if v_gender == "female" else "Aarav"
+
         if self.search.google_search.enabled and self.search.domains.allow:
             # Not an error, but the user must understand what they are getting.
             object.__setattr__(self, "_allowlist_is_advisory", True)

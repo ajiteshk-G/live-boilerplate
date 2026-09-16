@@ -233,3 +233,59 @@ def test_follow_user_warns_on_models_that_fix_the_output_language():
 
     assert any("fixed output language" in w for w in warnings)
 
+
+# ------------------------------------------------------- agent name & gender
+
+
+def test_every_voice_has_an_assigned_gender():
+    from gemini_live.settings.voices import FEMALE_VOICES, MALE_VOICES, VOICE_GENDERS
+
+    assert set(VOICE_GENDERS.keys()) == set(LIVE_VOICES.keys())
+    assert len(FEMALE_VOICES) == 14
+    assert len(MALE_VOICES) == 16
+    assert FEMALE_VOICES.isdisjoint(MALE_VOICES)
+
+
+def test_mixing_female_agent_with_male_voice_is_rejected():
+    with pytest.raises(ValueError, match="Gender mismatch.*Male and female cannot be mixed"):
+        make_cfg(
+            agent={"name": "Ananya", "gender": "female"},
+            speech={"voice_name": "Puck"},
+        )
+
+
+def test_mixing_male_agent_with_female_voice_is_rejected():
+    with pytest.raises(ValueError, match="Gender mismatch.*Male and female cannot be mixed"):
+        make_cfg(
+            agent={"name": "Aarav", "gender": "male"},
+            speech={"voice_name": "Kore"},
+        )
+
+
+def test_setting_male_agent_without_voice_selects_male_voice():
+    cfg = make_cfg(agent={"name": "Aarav", "gender": "male"})
+    assert cfg.speech.voice_name == "Puck"
+
+
+def test_setting_male_voice_without_agent_aligns_agent_gender():
+    cfg = make_cfg(speech={"voice_name": "Fenrir"})
+    assert cfg.agent.gender == "male"
+    assert cfg.agent.name == "Aarav"
+
+
+def test_system_instruction_enforces_agent_name_and_anti_mixing_rules():
+    female_cfg = make_cfg(agent={"name": "Ananya", "gender": "female"})
+    female_prompt = build_system_instruction(female_cfg, DomainPolicy())
+    assert 'Your name is "Ananya"' in female_prompt
+    assert "strictly FEMALE" in female_prompt
+    assert "DO NOT MIX MALE AND FEMALE" in female_prompt
+    assert "karungi" in female_prompt
+
+    male_cfg = make_cfg(agent={"name": "Aarav", "gender": "male"})
+    male_prompt = build_system_instruction(male_cfg, DomainPolicy())
+    assert 'Your name is "Aarav"' in male_prompt
+    assert "strictly MALE" in male_prompt
+    assert "DO NOT MIX MALE AND FEMALE" in male_prompt
+    assert "karunga" in male_prompt
+
+

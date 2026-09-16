@@ -139,6 +139,7 @@ def voices_cmd(
         INDIAN_LOCALES,
         LIVE_LANGUAGES,
         LIVE_VOICES,
+        VOICE_GENDERS,
         base_language,
         language_directive,
         language_label,
@@ -149,11 +150,15 @@ def voices_cmd(
     chosen_voice = cfg.speech.voice_name
     chosen_lang = cfg.speech.language_code
 
-    voice_table = Table("voice", "character", "every model?", title="VOICES (30)")
+    voice_table = Table(
+        "voice", "gender", "character", "every model?", title="VOICES (30)"
+    )
     for name, character in LIVE_VOICES.items():
         selected = name == chosen_voice
+        gender = VOICE_GENDERS.get(name, "?")
         voice_table.add_row(
             f"[green]{name} \u2190 selected[/green]" if selected else name,
+            gender,
             character,
             "yes" if name in CORE_VOICES else "native-audio only",
         )
@@ -185,7 +190,8 @@ def voices_cmd(
 
     follow_user = cfg.speech.language_mode == "follow_user"
     console.print(
-        f"\n[bold]Model:[/bold] {cfg.model.name}   "
+        f"\n[bold]Agent:[/bold] {cfg.agent.name} ({cfg.agent.gender})   "
+        f"[bold]Model:[/bold] {cfg.model.name}   "
         f"[bold]Voice:[/bold] {chosen_voice or '(model default)'}   "
         f"[bold]Language:[/bold] "
         f"{language_label(chosen_lang) if chosen_lang else '(model default)'}"
@@ -641,14 +647,17 @@ def serve(
     ssl_keyfile: str | None = typer.Option(None, "--ssl-keyfile"),
 ) -> None:
     """Run the web console."""
+    import os
+
     import uvicorn
 
     cfg = _load(config)
     _setup_logging(cfg)
     from .server.app import create_app
 
-    bind_host = host or cfg.server.host
-    bind_port = port or cfg.server.port
+    env_port = int(os.environ["PORT"]) if os.environ.get("PORT") else None
+    bind_host = host or ("0.0.0.0" if env_port else cfg.server.host)
+    bind_port = port or env_port or cfg.server.port
     scheme = "https" if ssl_certfile else "http"
 
     console.print(f"\n[bold]Open {scheme}://localhost:{bind_port}[/bold]")

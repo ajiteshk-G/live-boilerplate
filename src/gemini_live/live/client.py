@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -53,14 +54,19 @@ class _GcloudCliCredentials(google.auth.credentials.Credentials):
 
 
 def _resolve_credentials(project: str | None) -> Any:
-    """Prefer active gcloud CLI credentials when available; fall back to ADC."""
-    if shutil.which("gcloud"):
+    """Prefer active gcloud CLI credentials on workstations; fall back to ADC."""
+    # On Cloud Run (K_SERVICE set), use metadata server ADC directly.
+    if not os.environ.get("K_SERVICE") and shutil.which("gcloud"):
         try:
             return _GcloudCliCredentials(quota_project_id=project)
         except Exception as exc:
             log.debug("gcloud CLI credentials unavailable (%s); falling back to ADC", exc)
-    creds, _ = google.auth.default(quota_project_id=project)
-    return creds
+    try:
+        creds, _ = google.auth.default(quota_project_id=project)
+        return creds
+    except Exception:
+        creds, _ = google.auth.default()
+        return creds
 
 
 def build_client(cfg: AppConfig) -> Any:

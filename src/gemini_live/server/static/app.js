@@ -71,7 +71,8 @@ function appendTranscript(role, text) {
     const item = document.createElement('div');
     item.className = `bubble bubble-${role}`;
     item.dataset.role = role;
-    item.innerHTML = `<div class="bubble-role">${role === 'user' ? 'You' : 'Gemini'}</div>
+    const label = role === 'user' ? 'You' : (state.agentName || 'Gemini');
+    item.innerHTML = `<div class="bubble-role">${label}</div>
                       <div class="bubble-text"></div>`;
     item.querySelector('.bubble-text').textContent = text;
     list.appendChild(item);
@@ -517,7 +518,11 @@ async function loadMeta() {
       audio.inputRate = data.audio.input_sample_rate;
       audio.outputRate = data.audio.output_sample_rate;
     }
-    el('model-name').textContent = data.config.model.name;
+    const agentName = data.config.agent?.name || 'Ananya';
+    const agentGender = data.config.agent?.gender || 'female';
+    const voiceName = data.config.speech?.voice_name || 'Kore';
+    state.agentName = agentName;
+    el('model-name').textContent = `${agentName} (${agentGender} · ${voiceName}) · ${data.config.model.name}`;
     el('tool-count').textContent =
       `${data.tools.selected.length} of ${data.tools.catalog_size}`;
     el('tool-tokens').textContent = `${fmt(data.tools.tokens_per_turn)} tokens/turn`;
