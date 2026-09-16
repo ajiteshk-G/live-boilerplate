@@ -80,6 +80,88 @@ function appendTranscript(role, text) {
   list.scrollTop = list.scrollHeight;
 }
 
+function prettyPayload(raw) {
+  if (raw == null) return '';
+  let val = raw;
+  if (typeof val === 'object' && val !== null && typeof val.result === 'string') {
+    try {
+      val = JSON.parse(val.result);
+    } catch {
+      val = val.result;
+    }
+  }
+  return typeof val === 'string' ? val : JSON.stringify(val, null, 2);
+}
+
+function renderToolCall(msg) {
+  const list = el('transcript');
+  // Break active model bubble so post-tool speech starts in a fresh bubble below the card.
+  state.lastModel = null;
+  const calls = msg.calls && msg.calls.length
+    ? msg.calls
+    : (msg.names || []).map((name, i) => ({ id: `${name}-${i}`, name, args: {} }));
+
+  calls.forEach((call, idx) => {
+    const cardId = call.id || `${call.name}-${Date.now()}-${idx}`;
+    const card = document.createElement('div');
+    card.className = 'tool-card';
+    card.dataset.toolId = cardId;
+    card.dataset.toolName = call.name;
+    card.innerHTML = `
+      <div class="tool-card-head">
+        <span class="tool-title">🔧 Tool Call · <code></code></span>
+        <span class="tool-badge running">Running…</span>
+      </div>
+      <div class="tool-section">
+        <div class="tool-label">Arguments</div>
+        <pre class="tool-json tool-args"></pre>
+      </div>
+      <div class="tool-section tool-result-box" hidden>
+        <div class="tool-label">Result</div>
+        <pre class="tool-json tool-res"></pre>
+      </div>
+    `;
+    card.querySelector('code').textContent = call.name;
+    card.querySelector('.tool-args').textContent = prettyPayload(call.args);
+    list.appendChild(card);
+    logEvent('tool', `calling ${call.name}(${JSON.stringify(call.args || {})})`);
+  });
+  list.scrollTop = list.scrollHeight;
+}
+
+function renderToolResult(msg) {
+  const list = el('transcript');
+  const results = msg.results || [];
+  results.forEach((res) => {
+    // Match by id first, otherwise find the last running card for this tool name
+    let card = res.id
+      ? list.querySelector(`.tool-card[data-tool-id="${CSS.escape(res.id)}"]`)
+      : null;
+    if (!card) {
+      const candidates = list.querySelectorAll(
+        `.tool-card[data-tool-name="${CSS.escape(res.name)}"]`
+      );
+      card = candidates[candidates.length - 1];
+    }
+    const isErr =
+      res.response && typeof res.response === 'object' && 'error' in res.response;
+    if (card) {
+      const badge = card.querySelector('.tool-badge');
+      badge.textContent = isErr ? '⚠ Error' : '✓ Completed';
+      badge.className = `tool-badge ${isErr ? 'err' : 'ok'}`;
+      const resBox = card.querySelector('.tool-result-box');
+      resBox.hidden = false;
+      card.querySelector('.tool-res').textContent = prettyPayload(res.response);
+    }
+    logEvent(
+      'tool',
+      isErr ? `error in ${res.name}` : `${res.name} completed`,
+      isErr ? 'warn' : ''
+    );
+  });
+  list.scrollTop = list.scrollHeight;
+}
+
 function logEvent(kind, text, cls) {
   const list = el('events');
   const row = document.createElement('div');
@@ -242,10 +324,10 @@ function connect() {
         state.lastModel = null;
         break;
       case 'tool_call':
-        logEvent('tool', `calling ${msg.names.join(', ')}`);
+        renderToolCall(msg);
         break;
       case 'tool_result':
-        logEvent('tool', msg.errors.length ? `errors: ${msg.errors.join(', ')}` : 'ok', msg.errors.length ? 'warn' : '');
+        renderToolResult(msg);
         break;
       case 'usage_turn':
         renderTurn(msg);

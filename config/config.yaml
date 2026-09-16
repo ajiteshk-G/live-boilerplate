@@ -39,6 +39,11 @@ model:
     for detail. When you use a tool, briefly say what you are doing and report
     the exact figures or ticket IDs returned.
 
+  # Restrict the assistant to ONLY discuss this topic/domain.
+  # If the user asks about anything outside this scope, the assistant politely
+  # declines and steers back to this topic. Set to null to disable.
+  talk_only_about: "Enterprise customer CRM accounts, loan EMI financial calculations, IT support tickets, and cloud platform service health"
+
   # Leave null to use the model defaults.
   temperature: null
   top_p: null
@@ -49,11 +54,15 @@ model:
 #
 # VOICE and LANGUAGE are independent. A voice is a timbre, not a locale: there
 # is no "Indian voice". Every voice can speak every supported language, and it
-# is `language_code` below that decides the language and the regional accent.
+# is `language_code` + `default_accent` below that decide the regional accent.
 #
 # Run `uv run glive voices` to print these lists with the current selection
 # marked.
 speech:
+  # Default vocal accent/persona maintained across ALL languages spoken
+  # (even when dynamically switching between English, Hindi, Tamil, etc.).
+  default_accent: Indian
+
   # ---- voice_name: all 30 prebuilt voices (name -- character) --------------
   # The eight marked (*) exist on EVERY Live model; the rest require a
   # native-audio model.
@@ -116,11 +125,9 @@ speech:
   #              for compliance/brand reasons, or a single-language IVR.
   language_mode: follow_user
 
-  # Open the call in the BROWSER's language (navigator.language) instead of the
-  # language_code above, when the browser reports one the Live API supports.
-  # This is what makes the app meet each user in their own language from the
-  # very first word, rather than starting in English and switching after they
-  # speak. Falls back to language_code for unsupported or missing locales.
+  # Open the call in the BROWSER's language (navigator.language) when supported,
+  # while `default_accent: Indian` keeps the Indian vocal accent across all
+  # languages and `language_mode: follow_user` switches with the user.
   use_client_locale: true
 
   # Native-audio models (the default model here) IGNORE language_code: they

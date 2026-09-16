@@ -194,25 +194,34 @@ def language_label(code: str) -> str:
     return f"{name} ({parts[1].upper()})" if len(parts) == 2 else name
 
 
-def language_directive(code: str, *, follow_user: bool = False) -> str:
-    """The system-instruction rule that decides what language is spoken.
+def language_directive(
+    code: str,
+    *,
+    follow_user: bool = False,
+    default_accent: str | None = None,
+) -> str:
+    """The system-instruction rule that decides what language and accent are spoken.
 
     Native-audio models ignore ``speech.language_code`` and choose a language
     themselves, so this is the only lever that works on them.
 
-    Two modes, because "speak Indian English" and "speak whatever the user
-    speaks" are opposite instructions and cannot share wording:
-
-    * ``follow_user=False`` pins one language. The wording follows Google's own
-      recommendation ("RESPOND IN <LANGUAGE>. YOU MUST RESPOND UNMISTAKABLY IN
-      <LANGUAGE>."), plus an accent line, because naming the language does not
-      pin the regional accent.
-    * ``follow_user=True`` makes ``code`` merely the opening language and the
-      fallback; from then on the model mirrors the user, switching mid-call as
-      soon as they do.
+    * ``follow_user=True`` makes ``code`` the opening language and fallback;
+      the model immediately switches to whatever language the user speaks while
+      keeping ``default_accent`` (Indian accent and tone) as its vocal persona.
+    * ``follow_user=False`` pins one language.
     """
     label = language_label(code)
     region = (code.strip().replace("_", "-").split("-", 1) + [""])[1].upper()
+    use_indian_accent = (
+        (default_accent or "").strip().lower() == "indian" or region == "IN"
+    )
+    accent_line = (
+        "DEFAULT ACCENT AND VOCAL TONE: Always speak with a natural, warm Indian accent "
+        "and Indian conversational cadence/tone as your default vocal persona across all "
+        "languages you speak (including English, Hindi, Hinglish, and any regional or "
+        "international language). Indian names, places, and number formats (lakhs/crores) "
+        "must sound native."
+    )
 
     if follow_user:
         lines = [
@@ -224,24 +233,18 @@ def language_directive(code: str, *, follow_user: bool = False) -> str:
             "Never ask the user which language they would like; infer it from what they "
             f"say. If their language is unclear, use {label}.",
             "Match their script and register too: reply in the script they used, and "
-            "keep mixed-language speech mixed rather than translating it away.",
+            "keep mixed-language speech (like Hinglish) mixed rather than translating it away.",
         ]
-        if region == "IN":
-            lines.append(
-                f"When speaking {LIVE_LANGUAGES.get(base_language(code), label)}, "
-                "use a natural Indian accent and Indian conversational phrasing."
-            )
+        if use_indian_accent:
+            lines.append(accent_line)
         return "\n".join(lines)
 
     lines = [
         f"RESPOND IN {label.upper()}. YOU MUST RESPOND UNMISTAKABLY IN {label.upper()}.",
         f"Speak only {label} unless the user explicitly asks for another language.",
     ]
-    if region == "IN":
-        lines.append(
-            "Use a natural Indian accent and Indian conversational phrasing "
-            "(Indian names, places, and number formats should sound native)."
-        )
+    if use_indian_accent:
+        lines.append(accent_line)
     return "\n".join(lines)
 
 

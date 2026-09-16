@@ -74,6 +74,28 @@ def test_no_rules_appended_when_no_domains_configured():
     assert build_system_instruction(cfg, DomainPolicy()) == "Be helpful."
 
 
+def test_talk_only_about_is_injected_into_system_instruction():
+    cfg = make_cfg(
+        model={
+            "system_instruction": "You are a support agent.",
+            "talk_only_about": "Enterprise CRM accounts and EMI loans",
+        },
+        speech={"language_code": None},
+    )
+    text = build_system_instruction(cfg, DomainPolicy())
+    assert 'TOPIC RESTRICTION: Talk ONLY about "Enterprise CRM accounts and EMI loans".' in text
+
+
+def test_default_accent_indian_is_preserved_across_any_language_code():
+    cfg = make_cfg(
+        model={"system_instruction": "Be helpful."},
+        speech={"language_code": "fr-FR", "default_accent": "Indian"},
+    )
+    text = build_system_instruction(cfg, DomainPolicy())
+    assert "Indian accent" in text
+    assert "SPEAK THE USER'S LANGUAGE" in text
+
+
 # -------------------------------------------------------------- core fields
 
 

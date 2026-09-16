@@ -18,6 +18,15 @@ from ..tools.registry import ToolRegistry
 
 def build_system_instruction(cfg: AppConfig, policy: DomainPolicy) -> str:
     text = cfg.model.system_instruction.strip()
+    if cfg.model.talk_only_about and cfg.model.talk_only_about.strip():
+        topic = cfg.model.talk_only_about.strip()
+        text = (
+            f"{text}\n"
+            f'TOPIC RESTRICTION: Talk ONLY about "{topic}". '
+            "Do not answer questions or engage in conversation about any other topic. "
+            f'If the user asks about anything outside "{topic}", politely decline and '
+            f'remind them that you can only assist with "{topic}".'
+        )
     # Native-audio models ignore speech.language_code and pick a language
     # themselves, so the language contract has to live in the prompt -- both to
     # pin a language and (in follow_user mode) to license switching.
@@ -27,6 +36,7 @@ def build_system_instruction(cfg: AppConfig, policy: DomainPolicy) -> str:
             + language_directive(
                 cfg.speech.language_code,
                 follow_user=cfg.speech.language_mode == "follow_user",
+                default_accent=cfg.speech.default_accent,
             )
         )
     if cfg.search.inject_domain_rules_into_system_instruction:

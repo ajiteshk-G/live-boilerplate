@@ -50,12 +50,12 @@ h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
 .status.warn { color: var(--warn); }
 .status.bad { color: var(--bad); }
 
-#mic-btn {
+#call-btn, #mic-btn {
   background: var(--accent); color: #05101f; border: 0; border-radius: 999px;
   padding: 9px 26px; font-weight: 650; font-size: 14px; cursor: pointer;
 }
-#mic-btn:disabled { background: var(--line); color: var(--muted); cursor: not-allowed; }
-#mic-btn.live { background: var(--bad); color: #fff; }
+#call-btn:disabled, #mic-btn:disabled { background: var(--line); color: var(--muted); cursor: not-allowed; }
+#call-btn.live, #mic-btn.live { background: var(--bad); color: #fff; }
 
 /* ----------------------------------------------------------------- layout */
 main {
@@ -86,6 +86,35 @@ main {
 .bubble-role { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 3px; }
 .bubble-user { background: var(--panel-2); align-self: flex-end; }
 .bubble-model { background: #14243a; align-self: flex-start; }
+
+.tool-card {
+  background: #0d1a2d; border: 1px solid #223859; border-radius: 8px;
+  padding: 9px 12px; font-size: 12px; max-width: 92%; align-self: flex-start;
+}
+.tool-card-head {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 10px; margin-bottom: 6px;
+}
+.tool-title { font-weight: 600; color: var(--text); }
+.tool-title code { color: var(--accent); font-family: ui-monospace, monospace; }
+.tool-badge {
+  font-size: 10px; padding: 2px 7px; border-radius: 999px;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.tool-badge.running { background: #2b2410; color: var(--warn); }
+.tool-badge.ok { background: #102a1a; color: var(--ok); }
+.tool-badge.err { background: #331418; color: var(--bad); }
+.tool-section { margin-top: 6px; }
+.tool-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin-bottom: 3px;
+}
+.tool-json {
+  margin: 0; padding: 6px 8px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 5px;
+  font-family: ui-monospace, monospace; font-size: 11px;
+  color: var(--text); overflow-x: auto; max-height: 140px;
+}
 
 .text-form { display: flex; gap: 8px; margin-top: 12px; }
 .text-form input {

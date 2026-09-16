@@ -291,7 +291,19 @@ async def test_tool_call_is_dispatched_and_answered():
     response = session.tool_responses[0]
     assert response.id == "call-9"  # echoing the id is mandatory
     assert response.response == {"now": "12:00"}
-    assert sink.of_kind("tool_call") == [{"names": ["t__now"]}]
+    assert sink.of_kind("tool_call") == [
+        {
+            "names": ["t__now"],
+            "calls": [{"id": "call-9", "name": "t__now", "args": {"tz": "UTC"}}],
+        }
+    ]
+    assert sink.of_kind("tool_result") == [
+        {
+            "names": ["t__now"],
+            "errors": [],
+            "results": [{"id": "call-9", "name": "t__now", "response": {"now": "12:00"}}],
+        }
+    ]
 
 
 async def test_failing_tool_is_reported_but_still_answered():

@@ -54,12 +54,15 @@ async def run_test(prompt: str, ws_url: str = "ws://127.0.0.1:8080/ws?locale=en-
             etype = msg.get("type")
 
             if etype == "tool_call":
-                print(f"  -> [CLOUD RUN MCP CALL]   {msg.get('names')}")
+                for c in msg.get("calls") or []:
+                    print(f"  -> [TOOL CALL]   {c.get('name')}({json.dumps(c.get('args'))})")
             elif etype == "tool_result":
-                print(
-                    f"  <- [CLOUD RUN MCP RESULT] {msg.get('names')} "
-                    f"(errors={msg.get('errors')})"
-                )
+                for r in msg.get("results") or []:
+                    resp = r.get("response") or {}
+                    summary = resp.get("result", resp) if isinstance(resp, dict) else resp
+                    if isinstance(summary, str) and len(summary) > 120:
+                        summary = summary[:120].replace("\n", " ") + " ..."
+                    print(f"  <- [TOOL RESULT] {r.get('name')} => {summary}")
             elif etype == "transcript" and msg.get("role") == "model":
                 transcript_fragments.append(msg.get("text", ""))
             elif etype == "usage_turn" and transcript_fragments:

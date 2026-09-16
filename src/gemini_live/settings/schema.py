@@ -58,6 +58,9 @@ class ModelSection(_Base):
     name: str = "gemini-live-2.5-flash-native-audio"
     response_modalities: list[ResponseModality] = Field(default_factory=_default_modalities)
     system_instruction: str = "You are a helpful, concise voice assistant."
+    talk_only_about: str | None = None
+    """Optional topic restriction injected into the system instruction.
+    When set, the model is instructed to ONLY discuss this topic/domain."""
     temperature: float | None = None
     top_p: float | None = None
     max_output_tokens: int | None = None
@@ -67,10 +70,13 @@ class SpeechSection(_Base):
     """Voice (timbre) and language (accent) of the spoken response.
 
     These are independent: a voice is not tied to a locale. The Indian accent
-    comes from ``language_code``, not from ``voice_name``.
+    comes from ``language_code`` and ``default_accent``, not from ``voice_name``.
     """
 
     voice_name: str | None = "Kore"
+
+    default_accent: str | None = "Indian"
+    """Default vocal accent/persona maintained across all languages spoken."""
 
     language_mode: Literal["follow_user", "pinned"] = "follow_user"
     """Whether the agent adapts to the user's language or stays in one.
@@ -88,8 +94,8 @@ class SpeechSection(_Base):
     """Let the browser's locale choose the opening language.
 
     The web client passes ``navigator.language``; if it names a language the
-    Live API supports it replaces ``language_code`` for that session. An
-    unsupported or missing locale falls back to ``language_code``.
+    Live API supports it replaces ``language_code`` for that session while
+    ``default_accent`` ("Indian") keeps the Indian accent persona intact.
     """
 
     enforce_language_in_system_instruction: bool = True

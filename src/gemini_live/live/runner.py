@@ -386,8 +386,22 @@ class LiveSessionRunner:
             return
         names = [getattr(c, "name", "?") for c in calls]
         call_ids = [str(getattr(c, "id", "")) for c in calls if getattr(c, "id", None)]
+        call_details = [
+            {
+                "id": str(getattr(c, "id", "") or ""),
+                "name": getattr(c, "name", "?"),
+                "args": dict(getattr(c, "args", None) or {}),
+            }
+            for c in calls
+        ]
+        for cd in call_details:
+            log.info("Tool call -> %s(%s)", cd["name"], cd["args"])
+
         self._pending_tools.update(call_ids)
-        await self._sink.event("tool_call", {"names": names})
+        await self._sink.event(
+            "tool_call",
+            {"names": names, "calls": call_details},
+        )
 
         task = asyncio.create_task(self._execute_tool_calls(calls, names, call_ids))
         for cid in call_ids or ["_anon"]:
@@ -410,6 +424,16 @@ class LiveSessionRunner:
             if responses and self._session is not None:
                 await self._session.send_tool_response(function_responses=responses)
             if responses:
+                result_details = [
+                    {
+                        "id": str(getattr(r, "id", "") or ""),
+                        "name": getattr(r, "name", "?"),
+                        "response": getattr(r, "response", None),
+                    }
+                    for r in responses
+                ]
+                for rd in result_details:
+                    log.info("Tool result <- %s: %s", rd["name"], rd["response"])
                 await self._sink.event(
                     "tool_result",
                     {
@@ -420,6 +444,7 @@ class LiveSessionRunner:
                             if isinstance(getattr(r, "response", None), dict)
                             and "error" in r.response
                         ],
+                        "results": result_details,
                     },
                 )
         except asyncio.CancelledError:
