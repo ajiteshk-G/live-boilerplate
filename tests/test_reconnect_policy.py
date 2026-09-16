@@ -25,6 +25,7 @@ from gemini_live.live.runner import is_permanent_error
         # Observed for real: a native-audio model rejecting TEXT output. The
         # config is wrong for that model and no amount of retrying fixes it.
         "1007 None. Text output is not supported for native audio output model.",
+        "1008 None. Request had invalid authentication credentials. Expected OAuth 2 access token",
     ],
 )
 def test_permanent_failures_are_recognised(message):

@@ -31,6 +31,7 @@ INPUT_MIME = f"audio/pcm;rate={INPUT_SAMPLE_RATE}"
 _PERMANENT_MARKERS = (
     "permission_denied",
     "unauthenticated",
+    "invalid authentication credentials",
     "invalid_argument",
     "invalid argument",
     "failed_precondition",

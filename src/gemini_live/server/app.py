@@ -152,8 +152,11 @@ def create_app(cfg: AppConfig) -> FastAPI:
                 ws.query_params.get("locale"),
                 session_cfg.speech.language_code,
             )
+        # Build a fresh client per session so a long-running server picks up
+        # refreshed Application Default Credentials rather than holding an
+        # expired startup token.
         runner = LiveSessionRunner(
-            session_cfg, state["client"], tools.registry, sink=sink
+            session_cfg, build_client(session_cfg), tools.registry, sink=sink
         )
         task = asyncio.create_task(runner.run())
 
