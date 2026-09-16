@@ -1,275 +1,256 @@
-# Gemini Live — bidirectional audio boilerplate
+# Gemini Live — Enterprise Bidirectional Voice Assistant Boilerplate (Vertex AI)
 
-A production-shaped starting point for a **Gemini Live** voice agent on **Vertex AI**, with three things most samples leave out:
+A production-ready, config-driven **Gemini Live API** voice agent built on **Google Cloud Vertex AI** (`gemini-live-2.5-flash-native-audio`), featuring:
 
-1. **Honest token accounting** — per-turn and per-session, broken down by modality, with the context-rent math that explains your bill.
-2. **Intelligent tool curation** — point it at a large MCP toolset and it selects a good small subset, because tools are re-billed on every turn.
-3. **A domain policy** for grounded search, with an explicit statement of what it can and cannot enforce.
-
-Talk to it in a browser: mic in, audio out, transcripts and live token costs on screen.
+1. **Agent Identity & Strict Gender Consistency (`agent.name` & `agent.gender`)** — Prevents mixing male and female voices or grammatical verb forms across all 30 prebuilt Gemini voices and 70 languages (including gendered Indian languages like Hindi, Hinglish, Marathi, Gujarati, Punjabi, and Urdu).
+2. **Default Indian Accent with Dynamic Language Switching** — Opens in Indian English (`en-IN`) or the browser's locale (`use_client_locale: true`), dynamically switches language mid-conversation (`language_mode: follow_user`) as soon as the user does, and preserves a warm Indian vocal accent (`default_accent: Indian`) across every language.
+3. **Topic Restriction Guardrail (`model.talk_only_about`)** — Enforces domain-scoped conversations via system-instruction rules so the assistant strictly stays within your configured enterprise scope.
+4. **Live MCP Tool Integration & Inline UI Cards** — Connects to remote **Model Context Protocol (MCP)** servers over `streamable_http` (deployed on Cloud Run), curates tools under a token budget, and renders live `.tool-card` call/response cards directly inside the browser conversation stream.
+5. **Honest Token & Context-Rent Accounting** — Tracks per-turn and per-session prompt, cached, response, tool-use, and thinking tokens by modality (`AUDIO` vs `TEXT`), with automatic context-window sliding compression.
 
 ---
 
-## Quick start (macOS / Linux, running locally)
+## Live Cloud Run Deployments
 
-Requires Python 3.11+. [`uv`](https://docs.astral.sh/uv/) will fetch a suitable
-Python for you if your system one is too old, which on macOS it usually is.
+| Service | Cloud Run HTTPS Endpoint | Description |
+| :--- | :--- | :--- |
+| **Gemini Live Voice Console** | **[`https://gemini-live-app-1047195478355.us-central1.run.app`](https://gemini-live-app-1047195478355.us-central1.run.app)** | Full Web UI & WebSocket relay (`Ananya · Female · Kore`). Because Cloud Run serves over HTTPS, Chrome grants microphone access automatically on any device. |
+| **Enterprise MCP Tool Server** | **[`https://gemini-live-mcp-tools-1047195478355.us-central1.run.app/mcp`](https://gemini-live-mcp-tools-1047195478355.us-central1.run.app/mcp)** | Stateless `streamable_http` FastMCP server exposing 4 enterprise tools (`lookup_customer_account`, `calculate_loan_emi`, `create_support_ticket`, `get_platform_service_status`). |
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Browser["Browser Web Console (HTTPS / localhost)"]
+        UI["Voice UI + Inline Tool Cards"]
+        Mic["WebAudio 16kHz PCM Mic"]
+        Speaker["WebAudio 24kHz PCM Player"]
+    end
+
+    subgraph App["FastAPI Backend (Cloud Run / Local)"]
+        WS["WebSocket Relay (/ws)"]
+        Runner["LiveSessionRunner"]
+        Curator["Tool Curator & Token Accountant"]
+    end
+
+    subgraph GCP["Google Cloud Platform (Vertex AI & Cloud Run)"]
+        LiveAPI["Vertex AI Gemini Live API\n(gemini-live-2.5-flash-native-audio)"]
+        MCP["Cloud Run MCP Tool Server\n(FastMCP streamable_http)"]
+    end
+
+    Mic -- "16kHz PCM Audio" --> WS
+    WS -- "24kHz PCM Audio + Events + Tool Cards" --> Speaker
+    WS <--> Runner
+    Runner <--> LiveAPI
+    Runner -- "MCP Tool Calls" --> MCP
+    Curator -. "Startup Curation" .-> MCP
+```
+
+---
+
+## Quick Start (Local Development)
+
+Requires **Python 3.11+** and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-# 0. Install uv, if you do not have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 1. Install this project
+# 1. Install dependencies
 uv sync --extra dev
 
-# 2. Point at your Google Cloud project and authenticate
-export GOOGLE_CLOUD_PROJECT=your-project-id
+# 2. Configure Google Cloud project & authentication
+export GOOGLE_CLOUD_PROJECT=mb-poc-352009
+gcloud auth login
 gcloud auth application-default login
-gcloud services enable aiplatform.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
 
-# 3. Confirm everything is reachable before debugging anything else
+# 3. Verify Vertex AI & configuration health
+uv run glive validate-config
 uv run glive doctor
 
-# 4. Go
-uv run glive serve
+# 4. Start the local web server
+uv run glive serve --host 127.0.0.1 --port 8080
 ```
 
-Then open **<http://localhost:8080>** and click **Start call**. The browser will
-ask for microphone permission the first time.
-
-**Stop call** hangs up: it ends the Live session server-side, so the model stops
-generating and the session stops being billed. Loading the page does *not* start
-a session — the socket (and with it the Live session) opens only when you start a
-call or send a message.
-
-> [!TIP]
-> Running on your own machine needs no TLS and no tunnel: browsers treat
-> `localhost` as a secure context, so the microphone just works.
-
-<details>
-<summary><b>Running on a remote machine instead?</b></summary>
-
-Chrome only grants microphone access in a [secure
-context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts).
-A plain-HTTP page served from a remote hostname is **not** one, so
-`getUserMedia()` fails, often silently.
-
-Forward the port and use localhost, which *is* trusted:
-
-```bash
-ssh -L 8080:localhost:8080 your-devbox.example.com
-```
-
-Then open `http://localhost:8080` on your laptop — not the remote hostname. The
-UI detects this mistake and shows a banner. Alternatively run
-`./scripts/gen_cert.sh` and serve over HTTPS with a self-signed certificate.
-
-</details>
+Open **`http://localhost:8080`** in Chrome and click **Start call**.
+- **Start call** opens the WebSocket and initiates the Vertex AI Live session.
+- **Stop call** immediately hangs up, flushes final token metrics, and terminates the Live session server-side so billing stops.
 
 ---
 
-## Why this exists
+## Key Configuration (`config/config.yaml`)
 
-### Every turn is billed for the entire context
+All settings live in [`config/config.yaml`](config/config.yaml) and are strictly validated by Pydantic (`extra="forbid"`).
 
-This is the single most important thing to understand about Live API cost. A turn is not charged for the new audio you just spoke — it is charged for **the whole resident context**: conversation history, system instruction, and every tool declaration, re-read from scratch, every single turn.
+### 1. Agent Identity & Anti-Gender-Mixing (`agent`)
 
-Two consequences drive the design of this repo:
+```yaml
+agent:
+  name: Ananya
+  gender: female # female | male
+  enforce_in_system_instruction: true
+```
 
-- **Tool declarations are a recurring charge, not a fixed one.** A 6,000-token tool payload over a 30-turn conversation is ~180,000 billed prompt tokens. Loading "all the tools from my MCP servers" is therefore not free, and it is not good practice.
-- **Context compression is a cost control**, not just a quality one. It is on by default.
+- **No Male/Female Mixing**:
+  1. **Voice Validation**: Every one of the 30 prebuilt Gemini Live voices is classified by gender in [`voices.py`](src/gemini_live/settings/voices.py) (`14 female`, `16 male`). If `agent.gender: female` is paired with a male voice (like `Puck` or `Fenrir`) or vice versa, startup validation immediately raises a `ValueError` refusing to mix genders.
+  2. **Grammatical Gender Consistency**: In languages with gendered first-person grammar (Hindi, Hinglish, Marathi, Gujarati, Punjabi, Urdu), [`agent_identity_directive()`](src/gemini_live/settings/voices.py) instructs the model to strictly use matching verb conjugations in every sentence (e.g., for female: *"karungi"*, *"dekhti hoon"*, *"bata rahi hoon"*; never male forms like *"karunga"* or *"bata raha hoon"*).
 
-The UI surfaces this directly as **context rent** (the prompt tokens you re-pay each turn) and **rent ratio** (what fraction of a turn's bill was just re-reading history). When the rent ratio climbs toward 1.0, you are paying almost entirely to re-send the past.
+### 2. Default Indian Accent & Dynamic Language Switching (`speech`)
 
-### Tools are frozen at session setup
+```yaml
+speech:
+  default_accent: Indian
+  voice_name: Kore               # Female voice matching agent.gender: female
+  language_code: en-IN           # Opening language / fallback
+  language_mode: follow_user     # Dynamically switches to whatever language the user speaks
+  use_client_locale: true        # Uses browser navigator.language when supported
+  enforce_language_in_system_instruction: true
+```
 
-The Live client protocol accepts exactly four message types — `setup`, `clientContent`, `realtimeInput`, `toolResponse`. There is **no tool-update message**. Whatever tool set you connect with is what you carry, and re-pay for, until you tear down the socket.
+Run `uv run glive voices` to view all 30 voices (with their gender and character) and all 70 supported languages:
 
-So the only lever is choosing a good small set *before* connecting. Google's own guidance is to keep the active set to **10–20 tools** (the hard API cap is 128); selection accuracy degrades as the count grows, on top of the cost.
+```bash
+uv run glive voices
+```
 
-That is what the curator does: it takes your full MCP toolset, ranks every tool against what your agent is actually *for*, and packs the best ones under a token budget.
+### 3. Topic Restriction Guardrail (`model.talk_only_about`)
+
+```yaml
+model:
+  name: gemini-live-2.5-flash-native-audio
+  response_modalities: ["AUDIO"]
+  talk_only_about: "Enterprise customer CRM accounts, loan EMI financial calculations, IT support tickets, and cloud platform service health"
+```
+
+When set, the system instruction enforces that the assistant only discusses this topic and politely declines off-topic questions.
+
+### 4. Remote Cloud Run MCP Toolset (`tools.mcp`)
+
+```yaml
+tools:
+  curation:
+    mode: auto
+    purpose: "Enterprise customer CRM lookup, loan EMI calculation, support ticket creation, platform health status, and current time."
+    max_tools: 20
+    budget_tokens: 6000
+  pinned: ["crm_ops__*"]
+  mcp:
+    - name: crm_ops
+      enabled: true
+      transport: streamable_http
+      url: https://gemini-live-mcp-tools-1047195478355.us-central1.run.app/mcp
+      startup_timeout_s: 20.0
+```
+
+Inspect tool curation and token costs anytime with:
 
 ```bash
 uv run glive tools explain
 ```
 
-shows exactly what was selected, what was dropped and why, what it costs per turn, and what it will cost over a conversation.
-
 ---
 
-## Configuration
+## Testing the MCP Tools from Terminal
 
-Everything lives in [`config/config.yaml`](config/config.yaml), validated by Pydantic. The schema sets `extra="forbid"` — a misspelled key is a loud error, not a silently ignored setting. `${VAR}` and `${VAR:-default}` interpolate from the environment and `.env`.
-
-[`config/config.minimal.yaml`](config/config.minimal.yaml) shows the true minimum: just your GCP project.
-
-The four things the original brief asked for:
-
-| Requirement | Where |
-|---|---|
-| MCP toolsets / tool restriction | `tools.mcp`, `tools.curation`, `tools.pinned`, `tools.exclude`, `tools.allow` |
-| Domain restriction for search | `search.domains.allow`, `search.domains.deny`, `search.google_search.exclude_domains` |
-| Gemini Live model | `model.name` |
-| Other Live flags | `speech`, `vad`, `transcription`, `thinking`, `session`, `media` |
-
-### Tool selection
-
-```yaml
-tools:
-  curation:
-    mode: auto          # rank + pack automatically
-    purpose: "Answer questions about our internal API docs and file bugs."
-    max_tools: 20
-    budget_tokens: 6000
-  pinned:  ["*__file_bug"]     # always include
-  exclude: ["*__delete_*"]     # never include
-  mcp:
-    - name: docs
-      transport: stdio
-      command: npx
-      args: ["-y", "@modelcontextprotocol/server-docs"]
-```
-
-`purpose` is the text tool descriptions are ranked against — the more specific it is, the better the selection. Leave it empty and it falls back to your system instruction.
-
-Set `mode: manual` if you would rather hand-maintain `tools.allow`.
-
-### Voice and language
-
-The agent **speaks the user's language**. It opens in the language the browser
-reports (`navigator.language`), then replies in whatever language the user
-actually speaks, switching mid-conversation as soon as they do.
-
-Two knobs that are easy to confuse:
-
-- **`speech.voice_name`** is a *timbre*. There is no "Indian voice" — all 30
-  prebuilt voices speak every supported language.
-- **`speech.language_code`** is the language the call *opens* in, and the
-  fallback when the user's language is unclear. **`en-IN`** (Indian English) is
-  what ships selected; every Indian locale and all 70 supported languages are
-  listed in the config.
-
-```yaml
-speech:
-  voice_name: Kore
-  language_mode: follow_user   # or "pinned" to always speak language_code
-  language_code: en-IN         # where the call starts / the fallback
-  use_client_locale: true      # the browser's language wins, per session
-  enforce_language_in_system_instruction: true
-```
-
-Set `language_mode: pinned` for a single-language agent; then `language_code` is
-a hard requirement rather than a starting point.
-
-> [!IMPORTANT]
-> **Native-audio models ignore `language_code`** — they detect and switch
-> language themselves. Google's documented workaround is to state the rule in
-> the system instruction, which is what
-> `enforce_language_in_system_instruction` does, and in `follow_user` mode it is
-> also what licenses the model to switch. On half-cascade models `language_code`
-> is a *fixed* output language, so they can only set the opening language; true
-> mid-call switching needs a native-audio model (the default here).
+You can test a full multi-turn Live API conversation with the Cloud Run MCP server directly from your terminal (without a browser or microphone) using the included test script:
 
 ```bash
-uv run glive voices    # all voices + languages, with your selection marked
+uv run python scripts/test_mcp_conversation.py
 ```
 
----
-
-## Domain restriction: what it actually guarantees
-
-> [!CAUTION]
-> **The allow-list is advisory. The deny-list is enforced.**
->
-> The Live API has **no allow-list field**. `types.GoogleSearch` exposes only `exclude_domains`, a deny-list, and only on Vertex.
-
-An allow-list here is enforced in three layers, and you should know the strength of each:
-
-| Layer | Strength |
-|---|---|
-| `google_search.exclude_domains` (fed by `domains.deny`) | **Enforced server-side.** Real. |
-| Generated system-instruction rules | Advisory — the model usually complies, but may not. |
-| Post-hoc audit of grounding citations | Detects violations. Does **not** prevent them. |
-
-The gap that matters: grounding metadata can arrive *after* audio playback has already started, so the model may finish speaking a non-approved source before the violation is logged. Violations land in `logs/violations.jsonl` and appear in the UI.
-
-> [!IMPORTANT]
-> There is **no gating mode**. This boilerplate deliberately does not offer one, rather than offer a knob that does not work. Buffering audio until citations clear would mean holding back every response for metadata that may never arrive, which turns a conversation into a series of long pauses.
->
-> If a source must never reach the user, put it in `domains.deny` — that is mirrored into `exclude_domains` and enforced server-side. If you need a hard gate on an allow-list, build it on the text path where you can inspect before you speak.
-
-Citations whose real hostname cannot be recovered — Vertex returns opaque redirect URIs — are reported as `UNKNOWN` rather than being quietly counted as allowed.
-
----
-
-## Token reporting
-
-After every turn you get the full `usageMetadata` breakdown: prompt, cached, response, tool-use, thinking, and total, each with its per-modality split (AUDIO vs TEXT), plus a running session total.
-
-> [!NOTE]
-> **The API reports exactly four per-modality arrays** — prompt, cache, response, and tool-use. There is no `thoughts_tokens_details` and no `total_tokens_details`. Thinking tokens are a scalar only, and any "total by modality" figure is **derived** by summing the four real arrays. This repo labels it as derived so it is never mistaken for a server-reported number.
-
-### The counting trap
-
-`usageMetadata` is **cumulative within a turn and resets at each `turnComplete`**. Most messages restate a running total, so the obvious implementation —
-
-```python
-total += response.usage_metadata.total_token_count   # WRONG
-```
-
-— over-counts badly. The correct algorithm is *last-wins within a turn → commit on `turnComplete` → sum committed turns*, which is what [`TokenAccountant`](src/gemini_live/usage/accountant.py) does.
-
-There is one genuinely unsettled detail: sources disagree on whether the *response* counter is cumulative or a per-message delta. Rather than guess, the accountant tracks both interpretations and `accounting_mode: auto` picks based on observed monotonicity. To see which your model actually emits:
+Or run a quick single-turn self-test via the CLI:
 
 ```bash
-uv run glive calibrate-usage
+uv run glive selftest --prompt "Look up customer account CUST-101 and calculate the monthly EMI for a 500,000 INR loan at 9.5% for 36 months."
 ```
-
-Everything is logged to `logs/usage.jsonl`; analyse a past session offline with `uv run glive usage-report`.
 
 ---
 
-## CLI
+## Deploying to Google Cloud Run
 
-| Command | Purpose | Needs GCP |
-|---|---|:-:|
-| `glive serve` | Run the web UI and Live relay | yes |
-| `glive validate-config` | Validate and pretty-print the resolved config | no |
-| `glive doctor` | Check credentials, model access, and MCP connectivity | yes |
-| `glive voices` | List every voice and language, marking the configured ones | no |
-| `glive tools explain` | Show the curated tool set, drop reasons, and projected cost | yes¹ |
-| `glive usage-report` | Offline analysis of `logs/usage.jsonl` | no |
-| `glive selftest` | Headless TEXT session exercising the tool loop and token reporting | yes |
-| `glive calibrate-usage` | Empirically determine the token accounting mode | yes |
-| `glive calibrate-tools` | Probe how session resumption interacts with a changed tool list | yes |
-
-¹ Falls back to estimated token costs if `count_tokens` and embeddings are unreachable, so it still produces useful output offline.
-
----
-
-## Layout
-
-```
-src/gemini_live/
-  settings/    config schema, ${VAR} loader, per-model capability filtering
-  usage/       token accounting, cost model, optional pricing
-  tools/       MCP client, schema compaction, cost metering, curation, dispatch
-  search/      domain policy and grounding-citation audit
-  live/        Live client, connect config, session runner
-  server/      FastAPI app, WebSocket relay, browser UI
-```
-
-## Development
+### 1. Deploy the Custom MCP Server (`mcp_server/`)
 
 ```bash
-uv run pytest -v          # full suite, runs offline with no GCP credentials
-uv run ruff check src tests
-uv run mypy src
+gcloud run deploy gemini-live-mcp-tools \
+  --source ./mcp_server \
+  --region us-central1 \
+  --project "$GOOGLE_CLOUD_PROJECT" \
+  --allow-unauthenticated
 ```
 
-## Known limitations
+### 2. Deploy the Gemini Live Web Application (Root `Dockerfile`)
 
-- **Vertex AI only.** The Gemini Developer API path is deliberately not wired up; `exclude_domains` is rejected there anyway.
-- **Search allow-listing is best-effort** in the default mode. See above.
-- **Adaptive tool re-selection is off by default.** Changing tools requires a reconnect, and how session resumption handles a changed tool list is undocumented — `glive calibrate-tools` is there to find out for your model.
-- **Dollar estimates are off by default.** A stale rate card is worse than no number; fill in `usage.pricing` with current rates if you want them.
+```bash
+gcloud run deploy gemini-live-app \
+  --source . \
+  --region us-central1 \
+  --project "$GOOGLE_CLOUD_PROJECT" \
+  --allow-unauthenticated \
+  --timeout 3600 \
+  --session-affinity \
+  --set-env-vars GOOGLE_CLOUD_PROJECT="$GOOGLE_CLOUD_PROJECT"
+```
+
+---
+
+## CLI Reference
+
+| Command | Description |
+| :--- | :--- |
+| `uv run glive serve` | Start the FastAPI web server and WebSocket Live relay |
+| `uv run glive validate-config` | Validate `config/config.yaml` and print the resolved configuration tree |
+| `uv run glive doctor` | Verify Google Cloud credentials, Vertex AI reachability, and token counting |
+| `uv run glive voices` | Display all 30 prebuilt voices (with gender & character) and 70 languages |
+| `uv run glive tools explain` | Inspect MCP tool curation scores, token costs per turn, and 30-turn projections |
+| `uv run glive selftest` | Run a headless Live session exercising tool calls and token accounting |
+| `uv run glive usage-report` | Analyze recorded session token usage logs from `logs/usage.jsonl` |
+| `uv run glive calibrate-usage` | Empirically test whether model token counters are cumulative or delta |
+
+---
+
+## Repository Structure
+
+```text
+.
+├── config/
+│   ├── config.yaml              # Primary reference configuration (annotated)
+│   └── config.minimal.yaml      # Minimal configuration template
+├── mcp_server/                  # Custom FastMCP Enterprise Tool Server (Cloud Run)
+│   ├── server.py                # 4 CRM/EMI/Ticket/Status tools (streamable_http)
+│   ├── Dockerfile               # Container definition for Cloud Run MCP service
+│   └── requirements.txt
+├── scripts/
+│   └── test_mcp_conversation.py # Headless terminal test script for Live + MCP tools
+├── src/gemini_live/
+│   ├── cli.py                   # `glive` Typer CLI implementation
+│   ├── pipeline.py              # Startup MCP tool discovery & embedding curation
+│   ├── live/
+│   │   ├── client.py            # Vertex AI client with self-refreshing gcloud/ADC auth
+│   │   ├── connect_config.py    # System instruction & LiveConnectConfig builder
+│   │   └── runner.py            # Bidirectional audio/text/tool session loop & reconnects
+│   ├── server/
+│   │   ├── app.py               # FastAPI server & WebSocket endpoint (/ws)
+│   │   └── static/              # Web Console UI (index.html, app.js, styles.css, worklets)
+│   ├── settings/
+│   │   ├── schema.py            # Pydantic config models & gender coherence validator
+│   │   └── voices.py            # 30-voice gender catalog & language/identity directives
+│   ├── tools/                   # MCP client adapter, schema compaction, & registry
+│   └── usage/                   # Per-turn & per-session token accountant
+├── tests/                       # 313 unit tests covering config, voices, runner, MCP, & UI
+├── Dockerfile                   # Production container for Gemini Live Web Console
+└── pyproject.toml
+```
+
+---
+
+## Development & Verification
+
+```bash
+# Run the complete unit test suite (313 tests)
+uv run pytest -q
+
+# Run linter and formatting checks
+uv run ruff check src tests mcp_server scripts
+
+# Run strict static type checking
+uv run mypy --check-untyped-defs src tests mcp_server scripts
+```
