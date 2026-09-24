@@ -68,10 +68,327 @@ def _bridge_gcp_credentials(project: str | None) -> None:
     google.auth.default = _patched_default  # type: ignore[assignment]
 
 
+_GCP_PROJECT: str | None = None
+_ENABLE_GCP_EXPORT: bool = False
+
+
+def _export_turn_gauge_to_cloud_monitoring(
+    *,
+    project_id: str,
+    metric_prefix: str,
+    session_id: str,
+    turn_number: int,
+    ttfb_ms: float | None,
+    turn_duration_ms: float | None,
+) -> None:
+    """Write per-turn GAUGE metrics (`turn.ttfb_ms` and `turn.duration_ms`) with
+    `session_id` and `turn_number` labels directly to Google Cloud Monitoring.
+
+    Why this is needed in addition to `gemini-live-telemetry`'s OTel Histogram:
+    1. OTel Histograms (`gemini_live.latency.ttfb_ms`) are exported as `DISTRIBUTION`
+       buckets with only `session_id` as a label, merging multiple turns within a
+       15-60s alignment window into a single distribution sample.
+    2. Including `turn_number` (`turn_1`, `turn_2`, ...) as a label on a `GAUGE`
+       (`DOUBLE`) metric creates a unique time series per turn, bypassing the 10s
+       same-series rate limit and allowing Cloud Monitoring charts to plot every
+       individual turn (`session_id` + `turn_number`).
+    """
+    try:
+        from google.api import metric_pb2, monitored_resource_pb2
+        from google.cloud import monitoring_v3
+        from google.protobuf.timestamp_pb2 import Timestamp
+
+        client = monitoring_v3.MetricServiceClient()
+        project_name = f"projects/{project_id}"
+
+        now = time.time()
+        seconds = int(now)
+        nanos = int((now - seconds) * 10**9)
+        interval = monitoring_v3.TimeInterval(
+            end_time=Timestamp(seconds=seconds, nanos=nanos)
+        )
+
+        series_list: list[Any] = []
+        turn_label = f"turn_{turn_number}"
+
+        resource_msg = monitored_resource_pb2.MonitoredResource(
+            type="generic_task",
+            labels={
+                "project_id": project_id,
+                "location": "global",
+                "namespace": "",
+                "job": "gemini-live-boilerplate",
+                "task_id": session_id[:32] or "live-session",
+            },
+        )
+
+        if ttfb_ms is not None:
+            series_list.append(
+                monitoring_v3.TimeSeries(
+                    metric=metric_pb2.Metric(
+                        type=f"workload.googleapis.com/{metric_prefix}.turn.ttfb_ms",
+                        labels={
+                            "session_id": session_id,
+                            "turn_number": turn_label,
+                        },
+                    ),
+                    resource=resource_msg,
+                    metric_kind=metric_pb2.MetricDescriptor.MetricKind.GAUGE,
+                    value_type=metric_pb2.MetricDescriptor.ValueType.DOUBLE,
+                    points=[
+                        monitoring_v3.Point(
+                            interval=interval,
+                            value=monitoring_v3.TypedValue(double_value=round(ttfb_ms, 2)),
+                        )
+                    ],
+                )
+            )
+
+        if turn_duration_ms is not None:
+            series_list.append(
+                monitoring_v3.TimeSeries(
+                    metric=metric_pb2.Metric(
+                        type=f"workload.googleapis.com/{metric_prefix}.turn.duration_ms",
+                        labels={
+                            "session_id": session_id,
+                            "turn_number": turn_label,
+                        },
+                    ),
+                    resource=resource_msg,
+                    metric_kind=metric_pb2.MetricDescriptor.MetricKind.GAUGE,
+                    value_type=metric_pb2.MetricDescriptor.ValueType.DOUBLE,
+                    points=[
+                        monitoring_v3.Point(
+                            interval=interval,
+                            value=monitoring_v3.TypedValue(
+                                double_value=round(turn_duration_ms, 2)
+                            ),
+                        )
+                    ],
+                )
+            )
+
+        if series_list:
+            client.create_time_series(name=project_name, time_series=series_list)
+    except Exception as exc:
+        log.debug("Cloud Monitoring per-turn gauge export skipped: %s", exc)
+
+
+def _ensure_per_turn_dashboard_widgets(
+    project_id: str, dashboard_name: str, metric_prefix: str
+) -> str | None:
+    """Ensure the Cloud Monitoring dashboard includes a 'Per-Turn Latency (by Turn #)'
+    row plotting `gemini_live.turn.ttfb_ms` and `gemini_live.latency.ttfb_ms` grouped
+    by `session_id` and `turn_number` / `vad_mode`."""
+    if not project_id:
+        return None
+    try:
+        import contextlib
+        import json
+
+        from gemini_live_telemetry._dashboard import _build_dashboard
+        from google.api import label_pb2, metric_pb2
+        from google.cloud import monitoring_v3
+        from google.cloud.monitoring_dashboard_v1 import DashboardsServiceClient
+        from google.cloud.monitoring_dashboard_v1 import types as dashboard_types
+        from google.cloud.monitoring_dashboard_v1.types import (
+            Dashboard,
+            UpdateDashboardRequest,
+        )
+
+        # Explicitly register MetricDescriptors for per-turn GAUGE metrics so Cloud
+        # Monitoring indexes `session_id` and `turn_number` labels immediately.
+        mclient = monitoring_v3.MetricServiceClient()
+        for m_suffix, m_disp in (
+            ("turn.ttfb_ms", "Per-Turn TTFB Latency (ms)"),
+            ("turn.duration_ms", "Per-Turn Duration (ms)"),
+        ):
+            with contextlib.suppress(Exception):
+                mclient.create_metric_descriptor(
+                    name=f"projects/{project_id}",
+                    metric_descriptor=metric_pb2.MetricDescriptor(
+                        type=f"workload.googleapis.com/{metric_prefix}.{m_suffix}",
+                        metric_kind=metric_pb2.MetricDescriptor.MetricKind.GAUGE,
+                        value_type=metric_pb2.MetricDescriptor.ValueType.DOUBLE,
+                        unit="ms",
+                        display_name=m_disp,
+                        description=f"{m_disp} indexed by session_id and turn_number",
+                        labels=[
+                            label_pb2.LabelDescriptor(
+                                key="session_id",
+                                value_type=label_pb2.LabelDescriptor.ValueType.STRING,
+                                description="Gemini Live session ID",
+                            ),
+                            label_pb2.LabelDescriptor(
+                                key="turn_number",
+                                value_type=label_pb2.LabelDescriptor.ValueType.STRING,
+                                description="1-based turn label (e.g. turn_1, turn_2)",
+                            ),
+                        ],
+                    ),
+                )
+
+        client = DashboardsServiceClient()
+        parent = f"projects/{project_id}"
+        target = None
+        for d in client.list_dashboards(parent=parent):
+            if d.display_name == dashboard_name:
+                target = d
+                break
+        if target is None:
+            return None
+
+        per_turn_title = "Per-Turn TTFB (ms) by Turn #"
+        dash = _build_dashboard(dashboard_name, metric_prefix, dashboard_types)
+        dash.name = target.name
+        dash.etag = target.etag
+        dash.mosaic_layout.columns = 12
+        for t in dash.mosaic_layout.tiles:
+            t.y_pos = int(t.y_pos) + 5
+
+        legend_tpl = "${metric.labels.session_id} - ${metric.labels.turn_number}"
+        otel_legend_tpl = "${metric.labels.session_id} (${metric.labels.vad_mode})"
+        ttfb_metric = f"workload.googleapis.com/{metric_prefix}.turn.ttfb_ms"
+        otel_ttfb = f"workload.googleapis.com/{metric_prefix}.latency.ttfb_ms"
+        dur_metric = f"workload.googleapis.com/{metric_prefix}.turn.duration_ms"
+        otel_dur = f"workload.googleapis.com/{metric_prefix}.latency.turn_duration_ms"
+        per_turn_tiles = [
+            {
+                "xPos": 0,
+                "yPos": 0,
+                "width": 12,
+                "height": 1,
+                "widget": {
+                    "text": {
+                        "content": (
+                            "## Per-Turn Latency Breakdown "
+                            "(Individual Turns by `session_id` & `turn_number`)"
+                        ),
+                        "format": "MARKDOWN",
+                    }
+                },
+            },
+            {
+                "xPos": 0,
+                "yPos": 1,
+                "width": 6,
+                "height": 4,
+                "widget": {
+                    "title": per_turn_title,
+                    "xyChart": {
+                        "dataSets": [
+                            {
+                                "plotType": "LINE",
+                                "legendTemplate": legend_tpl,
+                                "timeSeriesQuery": {
+                                    "timeSeriesFilter": {
+                                        "filter": f'metric.type="{ttfb_metric}"',
+                                        "aggregation": {
+                                            "alignmentPeriod": "60s",
+                                            "perSeriesAligner": "ALIGN_MAX",
+                                            "crossSeriesReducer": "REDUCE_MAX",
+                                            "groupByFields": [
+                                                'metric.label."session_id"',
+                                                'metric.label."turn_number"',
+                                            ],
+                                        },
+                                    }
+                                },
+                            },
+                            {
+                                "plotType": "LINE",
+                                "legendTemplate": otel_legend_tpl,
+                                "timeSeriesQuery": {
+                                    "timeSeriesFilter": {
+                                        "filter": f'metric.type="{otel_ttfb}"',
+                                        "aggregation": {
+                                            "alignmentPeriod": "60s",
+                                            "perSeriesAligner": "ALIGN_DELTA",
+                                            "crossSeriesReducer": "REDUCE_MEAN",
+                                            "groupByFields": [
+                                                'metric.label."session_id"',
+                                                'metric.label."vad_mode"',
+                                            ],
+                                        },
+                                    }
+                                },
+                            },
+                        ],
+                        "yAxis": {"label": "ms", "scale": "LINEAR"},
+                    },
+                },
+            },
+            {
+                "xPos": 6,
+                "yPos": 1,
+                "width": 6,
+                "height": 4,
+                "widget": {
+                    "title": "Per-Turn Duration (ms) by Turn #",
+                    "xyChart": {
+                        "dataSets": [
+                            {
+                                "plotType": "LINE",
+                                "legendTemplate": legend_tpl,
+                                "timeSeriesQuery": {
+                                    "timeSeriesFilter": {
+                                        "filter": f'metric.type="{dur_metric}"',
+                                        "aggregation": {
+                                            "alignmentPeriod": "60s",
+                                            "perSeriesAligner": "ALIGN_MAX",
+                                            "crossSeriesReducer": "REDUCE_MAX",
+                                            "groupByFields": [
+                                                'metric.label."session_id"',
+                                                'metric.label."turn_number"',
+                                            ],
+                                        },
+                                    }
+                                },
+                            },
+                            {
+                                "plotType": "LINE",
+                                "legendTemplate": "${metric.labels.session_id}",
+                                "timeSeriesQuery": {
+                                    "timeSeriesFilter": {
+                                        "filter": f'metric.type="{otel_dur}"',
+                                        "aggregation": {
+                                            "alignmentPeriod": "60s",
+                                            "perSeriesAligner": "ALIGN_DELTA",
+                                            "crossSeriesReducer": "REDUCE_MEAN",
+                                            "groupByFields": [
+                                                'metric.label."session_id"',
+                                            ],
+                                        },
+                                    }
+                                },
+                            },
+                        ],
+                        "yAxis": {"label": "ms", "scale": "LINEAR"},
+                    },
+                },
+            },
+        ]
+        extra_dash = Dashboard.from_json(
+            json.dumps({"mosaicLayout": {"columns": 12, "tiles": per_turn_tiles}})
+        )
+        combined_tiles = list(extra_dash.mosaic_layout.tiles) + list(
+            dash.mosaic_layout.tiles
+        )
+        del dash.mosaic_layout.tiles[:]
+        dash.mosaic_layout.tiles.extend(combined_tiles)
+        res = client.update_dashboard(request=UpdateDashboardRequest(dashboard=dash))
+        return str(res.name)
+    except Exception as exc:
+        log.debug("Could not patch per-turn widgets onto Cloud Monitoring dashboard: %s", exc)
+        return None
+
+
 def activate_telemetry(cfg: AppConfig) -> dict[str, Any]:
     """Activate `gemini-live-telemetry` once at process startup."""
-    global _ACTIVATED, _DASHBOARD_RESOURCE
+    global _ACTIVATED, _DASHBOARD_RESOURCE, _GCP_PROJECT, _ENABLE_GCP_EXPORT
     tcfg = cfg.telemetry
+    _GCP_PROJECT = cfg.vertex.project
+    _ENABLE_GCP_EXPORT = bool(tcfg.enable_gcp_export)
     if not tcfg.enabled:
         return {"enabled": False, "activated": False}
 
@@ -86,6 +403,7 @@ def activate_telemetry(cfg: AppConfig) -> dict[str, Any]:
 
     try:
         import io
+        import threading
 
         import gemini_live_telemetry
         import gemini_live_telemetry.otel as _glt_otel
@@ -112,6 +430,12 @@ def activate_telemetry(cfg: AppConfig) -> dict[str, Any]:
         )
         gemini_live_telemetry.activate(inst_cfg)
         _ACTIVATED = True
+        if tcfg.enable_dashboard and cfg.vertex.project:
+            threading.Thread(
+                target=_ensure_per_turn_dashboard_widgets,
+                args=(cfg.vertex.project, tcfg.dashboard_name, tcfg.metric_prefix),
+                daemon=True,
+            ).start()
         log.info(
             "gemini-live-telemetry activated (project=%s, dashboard=%r, metrics_dir=%s)",
             cfg.vertex.project,
@@ -161,11 +485,14 @@ def sync_turn_latency_to_telemetry(
     turn_duration_ms: float | None,
     was_interrupted: bool = False,
 ) -> None:
-    """Ensure `gemini-live-telemetry` MetricsStore, OTel instruments & AppMetricsLogger
-    have accurate turn latency (`ttfb_ms` and `duration_ms`)."""
+    """Ensure `gemini-live-telemetry` MetricsStore, OTel instruments, AppMetricsLogger,
+    and Google Cloud Monitoring per-turn GAUGE time series have accurate turn latency
+    (`ttfb_ms` and `duration_ms`)."""
     if ttfb_ms is None and turn_duration_ms is None:
         return
     try:
+        import threading
+
         from gemini_live_telemetry import _instruments as inst
         from gemini_live_telemetry import get_app_logger, get_metrics_store
         from gemini_live_telemetry._wrappers import get_session_map
@@ -216,12 +543,35 @@ def sync_turn_latency_to_telemetry(
             ):
                 last_turn.duration_ms = round(turn_duration_ms, 2)
 
-        # Record in OpenTelemetry histograms so Cloud Monitoring receives every turn
-        attrs = {inst.ATTR_SESSION_ID: sid}
+        # Record in OpenTelemetry histograms with turn label in `vad_mode` & `session_id`
+        turn_tag = f"turn_{turn_index + 1}"
         if ttfb_ms is not None and inst.latency_ttfb is not None:
-            inst.latency_ttfb.record(round(ttfb_ms, 2), attributes=attrs)
+            inst.latency_ttfb.record(
+                round(ttfb_ms, 2),
+                attributes={inst.ATTR_SESSION_ID: sid, "vad_mode": turn_tag},
+            )
         if turn_duration_ms is not None and inst.latency_turn_duration is not None:
-            inst.latency_turn_duration.record(round(turn_duration_ms, 2), attributes=attrs)
+            inst.latency_turn_duration.record(
+                round(turn_duration_ms, 2),
+                attributes={inst.ATTR_SESSION_ID: f"{sid}/{turn_tag}"},
+            )
+
+        # Also export direct per-turn GAUGE time series (`gemini_live.turn.ttfb_ms` &
+        # `gemini_live.turn.duration_ms`) labeled by (session_id, turn_number) so
+        # Cloud Monitoring plots every individual turn without 15-60s histogram bucketing.
+        if _ENABLE_GCP_EXPORT and _GCP_PROJECT:
+            threading.Thread(
+                target=_export_turn_gauge_to_cloud_monitoring,
+                kwargs={
+                    "project_id": _GCP_PROJECT,
+                    "metric_prefix": "gemini_live",
+                    "session_id": sid,
+                    "turn_number": turn_index + 1,
+                    "ttfb_ms": ttfb_ms,
+                    "turn_duration_ms": turn_duration_ms,
+                },
+                daemon=True,
+            ).start()
 
         app_logger = get_app_logger()
         if app_logger is not None and ttfb_ms is not None:
