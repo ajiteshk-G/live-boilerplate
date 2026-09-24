@@ -18,6 +18,9 @@ const state = {
   // True once the user hung up, so onclose knows this was deliberate.
   ended: false,
   turns: [],
+  latencies: [],
+  setupLatencyMs: null,
+  toolRtts: [],
   lastUser: null,
   lastModel: null,
 };
@@ -133,6 +136,11 @@ function renderToolCall(msg) {
 function renderToolResult(msg) {
   const list = el('transcript');
   const results = msg.results || [];
+  const rtt = msg.round_trip_ms != null ? Math.round(msg.round_trip_ms) : null;
+  if (rtt != null) {
+    state.toolRtts.push(rtt);
+    renderLatencyDashboard();
+  }
   results.forEach((res) => {
     // Match by id first, otherwise find the last running card for this tool name
     let card = res.id
@@ -148,7 +156,8 @@ function renderToolResult(msg) {
       res.response && typeof res.response === 'object' && 'error' in res.response;
     if (card) {
       const badge = card.querySelector('.tool-badge');
-      badge.textContent = isErr ? '⚠ Error' : '✓ Completed';
+      const rttSuffix = rtt != null ? ` · ${rtt} ms` : '';
+      badge.textContent = isErr ? `⚠ Error${rttSuffix}` : `✓ Completed${rttSuffix}`;
       badge.className = `tool-badge ${isErr ? 'err' : 'ok'}`;
       const resBox = card.querySelector('.tool-result-box');
       resBox.hidden = false;
@@ -156,7 +165,9 @@ function renderToolResult(msg) {
     }
     logEvent(
       'tool',
-      isErr ? `error in ${res.name}` : `${res.name} completed`,
+      isErr
+        ? `error in ${res.name}`
+        : `${res.name} completed${rtt != null ? ` (${rtt} ms)` : ''}`,
       isErr ? 'warn' : ''
     );
   });
@@ -172,12 +183,116 @@ function logEvent(kind, text, cls) {
   while (list.childElementCount > 60) list.lastElementChild.remove();
 }
 
+function ttfbSeverityClass(ms) {
+  if (ms == null) return '';
+  if (ms < 500) return 'ok';
+  if (ms <= 1000) return 'warn';
+  return 'bad';
+}
+
+function percentile(arr, p) {
+  if (!arr.length) return null;
+  const sorted = [...arr].sort((a, b) => a - b);
+  if (sorted.length === 1) return sorted[0];
+  const idx = (p / 100) * (sorted.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] * (1 - (idx - lo)) + sorted[hi] * (idx - lo);
+}
+
+function renderLatencyDashboard() {
+  const pts = state.latencies;
+  const ttfbs = pts.map((p) => p.ttfb_ms).filter((v) => v != null && v > 0);
+  const durs = pts.map((p) => p.duration_ms).filter((v) => v != null && v > 0);
+
+  const avgTtfb = ttfbs.length
+    ? Math.round(ttfbs.reduce((a, b) => a + b, 0) / ttfbs.length)
+    : null;
+  const p95Ttfb = ttfbs.length ? Math.round(percentile(ttfbs, 95)) : null;
+  const avgDur = durs.length
+    ? Math.round(durs.reduce((a, b) => a + b, 0) / durs.length)
+    : null;
+  const avgToolRtt = state.toolRtts.length
+    ? Math.round(state.toolRtts.reduce((a, b) => a + b, 0) / state.toolRtts.length)
+    : null;
+
+  el('lat-avg-ttfb').textContent = avgTtfb != null ? `${fmt(avgTtfb)}` : '—';
+  el('lat-p95-ttfb').textContent = p95Ttfb != null ? `${fmt(p95Ttfb)}` : '—';
+  el('lat-avg-dur').textContent = avgDur != null ? `${fmt(avgDur)}` : '—';
+
+  const setupStr = state.setupLatencyMs != null ? `${Math.round(state.setupLatencyMs)}` : '—';
+  const toolStr = avgToolRtt != null ? `${avgToolRtt}` : '—';
+  el('lat-setup').textContent = `${setupStr} / ${toolStr}`;
+
+  const lastTtfb = ttfbs.length ? Math.round(ttfbs[ttfbs.length - 1]) : null;
+  el('lat-last').textContent = lastTtfb != null ? `${fmt(lastTtfb)} ms` : '—';
+
+  const svg = el('latency-chart');
+  if (!pts.length) {
+    svg.innerHTML = '';
+    el('latency-max').textContent = '0 ms';
+    return;
+  }
+  const w = 260;
+  const h = 64;
+  const maxVal = Math.max(...ttfbs, 1000);
+  el('latency-max').textContent = `${fmt(Math.round(Math.max(...ttfbs, 0)))} ms`;
+
+  const n = pts.length;
+  const slotW = w / Math.max(n, 8);
+  const barW = Math.max(4, Math.min(18, slotW * 0.68));
+  const y500 = (h - (500 / maxVal) * (h - 10)).toFixed(1);
+  const y1000 = (h - (1000 / maxVal) * (h - 10)).toFixed(1);
+
+  const bars = pts
+    .map((p, idx) => {
+      const val = p.ttfb_ms ?? 0;
+      const barH = Math.max(3, (val / maxVal) * (h - 10));
+      const x = (idx * slotW + (slotW - barW) / 2).toFixed(1);
+      const y = (h - barH).toFixed(1);
+      const color =
+        val < 500 ? 'var(--ok)' : val <= 1000 ? 'var(--warn)' : 'var(--bad)';
+      return `<rect x="${x}" y="${y}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" rx="2" fill="${color}">
+        <title>Turn ${p.turn}: TTFB ${Math.round(val)} ms · Duration ${Math.round(p.duration_ms || 0)} ms</title>
+      </rect>`;
+    })
+    .join('');
+
+  svg.innerHTML = `
+    <line x1="0" y1="${y500}" x2="${w}" y2="${y500}" stroke="#3fb95055" stroke-dasharray="3,3" stroke-width="1"/>
+    <line x1="0" y1="${y1000}" x2="${w}" y2="${y1000}" stroke="#d2992255" stroke-dasharray="3,3" stroke-width="1"/>
+    ${bars}
+  `;
+}
+
 // --------------------------------------------------------------- token panel
 
 function renderTurn(payload) {
   const s = payload.scalars;
   const c = payload.cost || {};
+  const lat = payload.latency || {};
   state.turns.push({ prompt: s.prompt, compression: c.compression_event });
+
+  if (lat.setup_latency_ms != null && state.setupLatencyMs == null) {
+    state.setupLatencyMs = lat.setup_latency_ms;
+  }
+  if (lat.ttfb_ms != null || lat.turn_duration_ms != null) {
+    state.latencies.push({
+      turn: payload.turn + 1,
+      ttfb_ms: lat.ttfb_ms,
+      duration_ms: lat.turn_duration_ms,
+      tool_rtt_ms: lat.tool_round_trip_ms,
+    });
+    renderLatencyDashboard();
+  }
+
+  const ttfbText = lat.ttfb_ms != null ? `${Math.round(lat.ttfb_ms)} ms` : '—';
+  const durText = lat.turn_duration_ms != null ? `${Math.round(lat.turn_duration_ms)} ms` : '—';
+  const toolRttHtml =
+    lat.tool_round_trip_ms != null
+      ? `<span class="lat-pill">🔧 Tool RTT: ${Math.round(lat.tool_round_trip_ms)} ms</span>`
+      : '';
 
   const row = document.createElement('div');
   row.className = 'turn';
@@ -185,6 +300,11 @@ function renderTurn(payload) {
     <div class="turn-head">
       <strong>Turn ${payload.turn + 1}</strong>
       <span class="turn-total">${fmt(s.total)} tokens</span>
+    </div>
+    <div class="turn-latency-bar">
+      <span class="lat-pill ${ttfbSeverityClass(lat.ttfb_ms)}">⚡ TTFB: ${ttfbText}</span>
+      <span class="lat-pill">⏱ Duration: ${durText}</span>
+      ${toolRttHtml}
     </div>
     <div class="turn-grid">
       <div><span class="label">Context rent</span><span class="val">${fmt(c.context_rent ?? s.prompt)}</span></div>
@@ -206,6 +326,7 @@ function renderTurn(payload) {
   `;
   el('turns').prepend(row);
   renderGrowth();
+  refreshTelemetryFromServer();
 
   el('tool-overhead').textContent =
     `${fmt(c.tool_declaration_tokens)} / turn · ${fmt(c.projected_tool_cost)} billed so far`;
@@ -303,6 +424,11 @@ function connect() {
     switch (msg.type) {
       case 'connected':
         setStatus(`Live · ${msg.model}`, 'ok');
+        if (msg.setup_latency_ms != null) {
+          state.setupLatencyMs = msg.setup_latency_ms;
+          renderLatencyDashboard();
+          logEvent('telemetry', `session setup ${Math.round(msg.setup_latency_ms)} ms`);
+        }
         logEvent('session', `${msg.tools.length} tool(s) available`);
         if (msg.language) {
           logEvent(
@@ -510,6 +636,46 @@ el('text-form').addEventListener('submit', async (e) => {
   input.value = '';
 });
 
+function applyTelemetrySnapshot(t) {
+  if (!t) return;
+  if (t.dashboard_url && el('gcp-dashboard-link')) {
+    el('gcp-dashboard-link').href = t.dashboard_url;
+  }
+  const agg = t.aggregates || {};
+  if (state.setupLatencyMs == null && agg.avg_setup_latency_ms != null) {
+    state.setupLatencyMs = agg.avg_setup_latency_ms;
+  }
+  // If no live session turns have been recorded in this browser tab yet, seed
+  // the chart from gemini-live-telemetry's in-memory MetricsStore.
+  if (!state.latencies.length && Array.isArray(t.turns) && t.turns.length) {
+    state.latencies = t.turns
+      .filter((item) => item.ttfb_ms != null || item.duration_ms != null)
+      .map((item, idx) => ({
+        turn: item.turn_number || idx + 1,
+        ttfb_ms: item.ttfb_ms,
+        duration_ms: item.duration_ms,
+      }));
+  }
+  if (!state.toolRtts.length && Array.isArray(t.tool_calls) && t.tool_calls.length) {
+    state.toolRtts = t.tool_calls
+      .map((tc) => tc.round_trip_ms)
+      .filter((v) => v != null && v > 0);
+  }
+  renderLatencyDashboard();
+}
+
+async function refreshTelemetryFromServer() {
+  try {
+    const res = await fetch('/api/telemetry');
+    if (res.ok) {
+      const data = await res.json();
+      applyTelemetrySnapshot(data);
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
 async function loadMeta() {
   try {
     const res = await fetch('/api/config');
@@ -517,6 +683,9 @@ async function loadMeta() {
     if (data.audio) {
       audio.inputRate = data.audio.input_sample_rate;
       audio.outputRate = data.audio.output_sample_rate;
+    }
+    if (data.telemetry) {
+      applyTelemetrySnapshot(data.telemetry);
     }
     const agentName = data.config.agent?.name || 'Ananya';
     const agentGender = data.config.agent?.gender || 'female';

@@ -4,8 +4,9 @@
 !.env.example
 config/config.local.yaml
 
-# Session output: token logs, policy violations, TLS material
+# Session output: token logs, policy violations, TLS material, telemetry snapshots
 logs/
+metrics/
 certs/
 *.pem
 

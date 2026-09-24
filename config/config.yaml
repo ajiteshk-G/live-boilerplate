@@ -247,6 +247,26 @@ usage:
   #   thinking_per_1k: 0.0
   #   currency: USD
 
+# ------------------------------------------------------------------ telemetry
+# Real-time OpenTelemetry instrumentation and Cloud Monitoring dashboards via
+# `gemini-live-telemetry` (https://pypi.org/project/gemini-live-telemetry/).
+# Tracks per-turn TTFB (`gemini_live.turn.ttfb_ms`), turn duration
+# (`gemini_live.turn.duration_ms`), session setup latency, tool call round-trip
+# latency, interruption counts, and audio chunk counters.
+telemetry:
+  enabled: true
+  enable_gcp_export: true
+  enable_json_export: true
+  enable_dashboard: true
+  dashboard_name: "Gemini Live API Metrics"
+  dashboard_url: "https://console.cloud.google.com/monitoring/dashboards/builder/505c1d9e-fa06-4663-b4b1-d8d7521558bc?project=mb-poc-352009"
+  metric_prefix: "workload.googleapis.com"
+  metrics_dir: "./metrics"
+  log_dir: "./metrics/logs"
+  export_interval_s: 15.0
+  json_flush_interval_s: 30.0
+  gcp_credential_file: null
+
 # ---------------------------------------------------------------------- tools
 tools:
   # Tools are frozen at session setup - there is no mid-session tool-update

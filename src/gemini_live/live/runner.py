@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from ..search.domain_policy import DomainPolicy
 from ..search.grounding_filter import GroundingFilter
 from ..settings.schema import AppConfig
+from ..telemetry import mark_session_input_timestamp, sync_turn_latency_to_telemetry
 from ..tools.registry import ToolRegistry
 from ..usage.accountant import TokenAccountant
 from ..usage.cost_model import CostModel
@@ -167,6 +169,14 @@ class LiveSessionRunner:
         self._pending_tools: set[str] = set()
         self._tool_tasks: dict[str, asyncio.Task[Any]] = {}
 
+        # Per-turn latency tracking (synced with gemini-live-telemetry)
+        self._setup_latency_ms: float | None = None
+        self._last_user_input_ts: float | None = None
+        self._turn_first_byte_ts: float | None = None
+        self._turn_ttfb_ms: float | None = None
+        self._turn_interrupted: bool = False
+        self._turn_tool_rtt_ms: list[float] = []
+
     # ------------------------------------------------------------------- run
 
     async def run(self) -> None:
@@ -183,9 +193,13 @@ class LiveSessionRunner:
                     resumption_handle=self._resume_handle,
                 )
                 try:
+                    t_connect = time.monotonic()
                     async with self._client.aio.live.connect(
                         model=self._cfg.model.name, config=config
                     ) as session:
+                        self._setup_latency_ms = round(
+                            (time.monotonic() - t_connect) * 1000.0, 2
+                        )
                         self._session = session
                         await self._sink.event(
                             "connected",
@@ -195,6 +209,7 @@ class LiveSessionRunner:
                                 "resumed": self._resume_handle is not None,
                                 "language": self._cfg.speech.language_code,
                                 "language_mode": self._cfg.speech.language_mode,
+                                "setup_latency_ms": self._setup_latency_ms,
                             },
                         )
                         await self._pump(session)
@@ -274,14 +289,22 @@ class LiveSessionRunner:
                 self._closed = True
                 return
             if kind == "audio":
+                if self._turn_first_byte_ts is None and self._last_user_input_ts is None:
+                    self._last_user_input_ts = time.monotonic()
                 await session.send_realtime_input(
                     audio=types.Blob(data=msg["data"], mime_type=INPUT_MIME)
                 )
             elif kind == "text":
                 # send_realtime_input for live input; send_client_content is only
                 # for seeding initial history.
+                now = time.monotonic()
+                self._last_user_input_ts = now
+                mark_session_input_timestamp(session, now)
                 await session.send_realtime_input(text=msg["text"])
             elif kind == "audio_stream_end":
+                now = time.monotonic()
+                self._last_user_input_ts = now
+                mark_session_input_timestamp(session, now)
                 await session.send_realtime_input(audio_stream_end=True)
 
     # -------------------------------------------------------------- downlink
@@ -344,25 +367,41 @@ class LiveSessionRunner:
                 "go_away", {"time_left": str(getattr(go_away, "time_left", ""))}
             )
 
+    def _mark_first_model_byte(self) -> None:
+        if self._turn_first_byte_ts is None:
+            now = time.monotonic()
+            self._turn_first_byte_ts = now
+            if self._last_user_input_ts is not None:
+                self._turn_ttfb_ms = round(
+                    max(1.0, (now - self._last_user_input_ts) * 1000.0), 2
+                )
+
     async def _handle_server_content(self, content: Any) -> None:
         # A single event can carry multiple parts (audio AND transcript), so we
         # must process all of them rather than branching on the first match.
+        input_tx = getattr(content, "input_transcription", None)
+        if input_tx is not None and getattr(input_tx, "text", None):
+            if self._turn_first_byte_ts is None:
+                now = time.monotonic()
+                self._last_user_input_ts = now
+                mark_session_input_timestamp(self._session, now)
+            await self._sink.event("transcript", {"role": "user", "text": input_tx.text})
+
         model_turn = getattr(content, "model_turn", None)
         if model_turn is not None:
             for part in getattr(model_turn, "parts", None) or []:
                 inline = getattr(part, "inline_data", None)
                 if inline is not None and getattr(inline, "data", None):
+                    self._mark_first_model_byte()
                     await self._sink.audio(inline.data)
                 text = getattr(part, "text", None)
                 if text:
+                    self._mark_first_model_byte()
                     await self._sink.event("text", {"text": text})
-
-        input_tx = getattr(content, "input_transcription", None)
-        if input_tx is not None and getattr(input_tx, "text", None):
-            await self._sink.event("transcript", {"role": "user", "text": input_tx.text})
 
         output_tx = getattr(content, "output_transcription", None)
         if output_tx is not None and getattr(output_tx, "text", None):
+            self._mark_first_model_byte()
             await self._sink.event("transcript", {"role": "model", "text": output_tx.text})
 
         grounding = getattr(content, "grounding_metadata", None)
@@ -371,6 +410,7 @@ class LiveSessionRunner:
             await self._sink.event("citations", audit.as_event())
 
         if getattr(content, "interrupted", False):
+            self._turn_interrupted = True
             self._cancel_tool_tasks()
             await self._sink.event("interrupted", {})
             await self._finalize_turn()
@@ -384,6 +424,7 @@ class LiveSessionRunner:
         calls = list(getattr(tool_call, "function_calls", None) or [])
         if not calls:
             return
+        self._mark_first_model_byte()
         names = [getattr(c, "name", "?") for c in calls]
         call_ids = [str(getattr(c, "id", "")) for c in calls if getattr(c, "id", None)]
         call_details = [
@@ -410,6 +451,7 @@ class LiveSessionRunner:
     async def _execute_tool_calls(
         self, calls: list[Any], names: list[str], call_ids: list[str]
     ) -> None:
+        t0 = time.monotonic()
         try:
             responses = await self._registry.dispatch_all(calls)
             # Filter out responses for any call IDs that were cancelled while running.
@@ -423,6 +465,14 @@ class LiveSessionRunner:
                 self._pending_tools.difference_update(call_ids)
             if responses and self._session is not None:
                 await self._session.send_tool_response(function_responses=responses)
+            rtt_ms = round((time.monotonic() - t0) * 1000.0, 2)
+            self._turn_tool_rtt_ms.append(rtt_ms)
+            # If the model hasn't started speaking its final answer yet, measure
+            # post-tool TTFB from when the tool response was sent.
+            if self._turn_first_byte_ts is None:
+                now = time.monotonic()
+                self._last_user_input_ts = now
+                mark_session_input_timestamp(self._session, now)
             if responses:
                 result_details = [
                     {
@@ -433,7 +483,9 @@ class LiveSessionRunner:
                     for r in responses
                 ]
                 for rd in result_details:
-                    log.info("Tool result <- %s: %s", rd["name"], rd["response"])
+                    log.info(
+                        "Tool result <- %s (%.1fms): %s", rd["name"], rtt_ms, rd["response"]
+                    )
                 await self._sink.event(
                     "tool_result",
                     {
@@ -445,6 +497,7 @@ class LiveSessionRunner:
                             and "error" in r.response
                         ],
                         "results": result_details,
+                        "round_trip_ms": rtt_ms,
                     },
                 )
         except asyncio.CancelledError:
@@ -469,11 +522,39 @@ class LiveSessionRunner:
     # ------------------------------------------------------------------ usage
 
     async def _finalize_turn(self) -> None:
+        turn_duration_ms: float | None = None
+        if self._turn_first_byte_ts is not None:
+            turn_duration_ms = round(
+                max(1.0, (time.monotonic() - self._turn_first_byte_ts) * 1000.0), 2
+            )
+        ttfb_ms = self._turn_ttfb_ms
+        was_interrupted = self._turn_interrupted
+        avg_tool_rtt = (
+            round(sum(self._turn_tool_rtt_ms) / len(self._turn_tool_rtt_ms), 2)
+            if self._turn_tool_rtt_ms
+            else None
+        )
+
+        # Reset per-turn latency trackers for the next turn
+        self._turn_first_byte_ts = None
+        self._turn_ttfb_ms = None
+        self._last_user_input_ts = None
+        self._turn_interrupted = False
+        self._turn_tool_rtt_ms.clear()
+
         if not self._accountant.has_inflight:
             return
         turn = self._accountant.commit_turn()
         if turn is None:
             return
+
+        sync_turn_latency_to_telemetry(
+            self._session,
+            turn_index=turn.turn_index,
+            ttfb_ms=ttfb_ms,
+            turn_duration_ms=turn_duration_ms,
+            was_interrupted=was_interrupted,
+        )
 
         growth = self._cost.observe_turn(turn)
         session_total = self._accountant.session_total()
@@ -484,6 +565,13 @@ class LiveSessionRunner:
             estimate = self._cost.estimate_cost(turn)
             if estimate is not None:
                 payload["cost"]["estimated_cost"] = round(estimate, 6)
+            payload["latency"] = {
+                "ttfb_ms": ttfb_ms,
+                "turn_duration_ms": turn_duration_ms,
+                "setup_latency_ms": self._setup_latency_ms,
+                "tool_round_trip_ms": avg_tool_rtt,
+                "was_interrupted": was_interrupted,
+            }
             await self._sink.event("usage_turn", payload)
             await self._sink.event("usage_session", session_total.as_event())
 

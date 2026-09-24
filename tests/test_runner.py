@@ -297,13 +297,14 @@ async def test_tool_call_is_dispatched_and_answered():
             "calls": [{"id": "call-9", "name": "t__now", "args": {"tz": "UTC"}}],
         }
     ]
-    assert sink.of_kind("tool_result") == [
-        {
-            "names": ["t__now"],
-            "errors": [],
-            "results": [{"id": "call-9", "name": "t__now", "response": {"now": "12:00"}}],
-        }
+    tool_results = sink.of_kind("tool_result")
+    assert len(tool_results) == 1
+    assert tool_results[0]["names"] == ["t__now"]
+    assert tool_results[0]["errors"] == []
+    assert tool_results[0]["results"] == [
+        {"id": "call-9", "name": "t__now", "response": {"now": "12:00"}}
     ]
+    assert isinstance(tool_results[0].get("round_trip_ms"), float)
 
 
 async def test_failing_tool_is_reported_but_still_answered():

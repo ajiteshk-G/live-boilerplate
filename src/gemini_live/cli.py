@@ -504,6 +504,10 @@ def selftest(
     _setup_logging(cfg)
     _make_headless(cfg)
 
+    from .telemetry import activate_telemetry, get_telemetry_snapshot
+
+    activate_telemetry(cfg)
+
     async def run() -> None:
         client = build_client(cfg)
         async with ToolPipeline(cfg, client) as pipeline:
@@ -569,7 +573,95 @@ def selftest(
             if not sink.of_kind("usage_turn"):
                 console.print("[yellow]No usage_turn event was produced.[/yellow]")
 
+            snap = get_telemetry_snapshot(cfg)
+            agg = snap.get("aggregates", {})
+            console.print(
+                f"\n[bold cyan]gemini-live-telemetry summary:[/bold cyan] "
+                f"Avg TTFB={agg.get('avg_ttfb_ms')} ms · "
+                f"P95 TTFB={agg.get('p95_ttfb_ms')} ms · "
+                f"Avg Turn Duration={agg.get('avg_turn_duration_ms')} ms · "
+                f"Setup={agg.get('avg_setup_latency_ms')} ms"
+            )
+
     asyncio.run(run())
+
+
+@app.command("telemetry")
+def telemetry_cmd(
+    config: str = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
+    provision_dashboard: bool = typer.Option(
+        False,
+        "--provision-dashboard",
+        help="Create or update the Google Cloud Monitoring dashboard now",
+    ),
+) -> None:
+    """Inspect `gemini-live-telemetry` configuration, local JSON snapshots, and GCP dashboard."""
+    from .telemetry import _bridge_gcp_credentials, activate_telemetry, get_telemetry_snapshot
+
+    cfg = _load(config)
+    _setup_logging(cfg)
+    status = activate_telemetry(cfg)
+
+    if provision_dashboard and cfg.vertex.project:
+        try:
+            from gemini_live_telemetry._dashboard import create_or_update_dashboard
+
+            _bridge_gcp_credentials(cfg.vertex.project)
+            res_name = create_or_update_dashboard(
+                project_id=cfg.vertex.project,
+                display_name=cfg.telemetry.dashboard_name,
+                metric_prefix=cfg.telemetry.metric_prefix,
+            )
+            console.print(f"[green]Cloud Monitoring Dashboard ready:[/green] {res_name}")
+        except Exception as exc:
+            console.print(f"[red]Dashboard provisioning failed:[/red] {exc}")
+
+    snap = get_telemetry_snapshot(cfg)
+    info = Table("setting", "value", title="GEMINI-LIVE-TELEMETRY CONFIG")
+    info.add_row("enabled", str(cfg.telemetry.enabled))
+    info.add_row("activated", str(status.get("activated", False)))
+    info.add_row("gcp_project_id", str(cfg.vertex.project))
+    info.add_row("dashboard_name", cfg.telemetry.dashboard_name)
+    info.add_row("dashboard_url", str(cfg.telemetry.dashboard_url or ""))
+    info.add_row("metric_prefix", cfg.telemetry.metric_prefix)
+    info.add_row("metrics_dir", cfg.telemetry.metrics_dir)
+    info.add_row("in_memory_turns", str(snap["aggregates"].get("total_turns", 0)))
+    console.print(info)
+
+    # Also inspect any persisted JSON snapshot files in metrics_dir
+    metrics_path = Path(cfg.telemetry.metrics_dir)
+    if metrics_path.exists():
+        files = sorted(metrics_path.glob("metrics_*.json"))
+        chosen_file: Path | None = None
+        chosen_data: dict[str, Any] = {}
+        for f in reversed(files):
+            try:
+                parsed = json.loads(f.read_text())
+                ga = parsed.get("global_aggregates") or parsed.get("global_summary") or {}
+                if chosen_file is None:
+                    chosen_file, chosen_data = f, ga
+                if ga.get("total_sessions", 0) > 0:
+                    chosen_file, chosen_data = f, ga
+                    break
+            except Exception:
+                continue
+        if chosen_file is not None and chosen_data:
+            hist = Table("metric", "value", title=f"LATEST SNAPSHOT ({chosen_file.name})")
+            for k in (
+                "total_sessions",
+                "total_turns",
+                "avg_ttfb_ms",
+                "p50_ttfb_ms",
+                "p95_ttfb_ms",
+                "p99_ttfb_ms",
+                "avg_turn_duration_ms",
+                "avg_tool_round_trip_ms",
+                "total_tool_calls",
+                "total_tokens",
+            ):
+                if k in chosen_data:
+                    hist.add_row(k, str(chosen_data[k]))
+            console.print(hist)
 
 
 @app.command("usage-report")

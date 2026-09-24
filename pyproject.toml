@@ -3,8 +3,9 @@ name = "gemini-live-boilerplate"
 version = "0.1.0"
 description = "Config-driven boilerplate for Gemini Live bidirectional audio on Vertex AI"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
+    "gemini-live-telemetry>=0.1.1",
     "google-genai>=1.0.0",
     "mcp>=1.2.0",
     "fastapi>=0.110.0",
@@ -53,3 +54,8 @@ ignore = ["B008"]
 python_version = "3.11"
 warn_unused_ignores = false
 ignore_missing_imports = true
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true

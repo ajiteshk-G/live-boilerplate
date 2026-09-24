@@ -18,6 +18,7 @@ from ..live.runner import INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, LiveSessionRunn
 from ..pipeline import ToolPipeline, ToolPipelineResult
 from ..settings.capabilities import filter_for_model
 from ..settings.schema import AppConfig, redact
+from ..telemetry import activate_telemetry, get_telemetry_snapshot
 from .ws_protocol import apply_client_message, decode_client_message, encode_event
 
 log = logging.getLogger(__name__)
@@ -53,6 +54,9 @@ def create_app(cfg: AppConfig) -> FastAPI:
     for warning in warnings:
         log.warning("%s", warning)
 
+    # Activate gemini-live-telemetry before any google-genai client/session is opened
+    telemetry_status = activate_telemetry(cfg)
+
     app = FastAPI(title=cfg.app.name)
     app.add_middleware(
         CORSMiddleware,
@@ -61,7 +65,7 @@ def create_app(cfg: AppConfig) -> FastAPI:
         allow_headers=["*"],
     )
 
-    state: dict[str, Any] = {"tools": None, "client": None}
+    state: dict[str, Any] = {"tools": None, "client": None, "telemetry": telemetry_status}
 
     @app.on_event("startup")
     async def _startup() -> None:
@@ -93,7 +97,12 @@ def create_app(cfg: AppConfig) -> FastAPI:
             "ok": True,
             "model": cfg.model.name,
             "tools": len(tools.selection.selected) if tools else 0,
+            "telemetry_enabled": cfg.telemetry.enabled,
         }
+
+    @app.get("/api/telemetry")
+    async def api_telemetry() -> JSONResponse:
+        return JSONResponse(get_telemetry_snapshot(cfg))
 
     @app.get("/api/config")
     async def api_config() -> JSONResponse:
@@ -101,6 +110,7 @@ def create_app(cfg: AppConfig) -> FastAPI:
         summary = {
             "config": redact(cfg),
             "warnings": warnings,
+            "telemetry": get_telemetry_snapshot(cfg),
             "tools": {
                 "selected": [
                     {

@@ -191,3 +191,41 @@ main {
 }
 .event.warn { color: var(--warn); }
 .event.bad { color: var(--bad); }
+
+/* -------------------------------------------------------------- telemetry */
+.dash-link {
+  font-size: 12px; font-weight: 500; color: var(--accent);
+  background: #14243a; border: 1px solid #223859; border-radius: 999px;
+  padding: 6px 13px; text-decoration: none; transition: background .15s;
+}
+.dash-link:hover { background: #1d3352; }
+
+.section-title-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 12px;
+}
+.section-title-row h2 { margin: 0; }
+.mini-link { font-size: 11px; color: var(--accent); text-decoration: none; }
+.mini-link:hover { text-decoration: underline; }
+
+.latency-summary { margin-bottom: 4px; }
+#latency-chart { width: 100%; height: 64px; background: #11161f; border-radius: 6px; }
+.lat-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin: 0 3px 0 6px; vertical-align: middle;
+}
+.lat-dot.ok { background: var(--ok); }
+.lat-dot.warn { background: var(--warn); }
+.lat-dot.bad { background: var(--bad); }
+
+.turn-latency-bar {
+  display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px;
+}
+.lat-pill {
+  font-size: 11px; font-variant-numeric: tabular-nums;
+  padding: 2px 7px; border-radius: 999px; background: var(--line); color: var(--text);
+}
+.lat-pill.ok { background: #12331c; color: var(--ok); }
+.lat-pill.warn { background: #3a2f12; color: var(--warn); }
+.lat-pill.bad { background: #3d1d1d; color: var(--bad); }
+

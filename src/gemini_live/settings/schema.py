@@ -333,6 +333,26 @@ class SearchSection(_Base):
     log_violations: str | None = "./logs/violations.jsonl"
 
 
+class TelemetrySection(_Base):
+    """Configuration for `gemini-live-telemetry` (per-turn TTFB, duration, and Cloud Monitoring)."""
+
+    enabled: bool = True
+    enable_gcp_export: bool = True
+    enable_json_export: bool = True
+    enable_dashboard: bool = True
+    dashboard_name: str = "Gemini Live API Metrics"
+    dashboard_url: str | None = (
+        "https://console.cloud.google.com/monitoring/dashboards/builder/"
+        "505c1d9e-fa06-4663-b4b1-d8d7521558bc?project=mb-poc-352009"
+    )
+    metric_prefix: str = "workload.googleapis.com"
+    metrics_dir: str = "./metrics"
+    log_dir: str = "./metrics/logs"
+    export_interval_s: float = 15.0
+    json_flush_interval_s: float = 30.0
+    gcp_credential_file: str | None = None
+
+
 class ServerSection(_Base):
     host: str = "127.0.0.1"
     port: int = 8080
@@ -367,6 +387,7 @@ class AppConfig(_Base):
     session: SessionSection = SessionSection()
     media: MediaSection = MediaSection()
     usage: UsageSection = UsageSection()
+    telemetry: TelemetrySection = TelemetrySection()
     tools: ToolsSection = ToolsSection()
     search: SearchSection = SearchSection()
     server: ServerSection = ServerSection()

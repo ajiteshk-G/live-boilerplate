@@ -26,6 +26,7 @@
     <span id="model-name" class="muted">…</span>
   </div>
   <div class="header-right">
+    <a id="gcp-dashboard-link" class="dash-link" href="https://console.cloud.google.com/monitoring/dashboards/builder/505c1d9e-fa06-4663-b4b1-d8d7521558bc?project=mb-poc-352009" target="_blank" rel="noopener" title="Open Google Cloud Monitoring Dashboard (Gemini Live API Metrics)">📊 Cloud Monitoring Dashboard ↗</a>
     <span id="status" class="status">Connecting…</span>
     <button id="call-btn">Start call</button>
   </div>
@@ -43,8 +44,31 @@
     <div id="citations" class="citations"></div>
   </section>
 
-  <!-- tokens -->
+  <!-- telemetry + tokens -->
   <section class="panel tokens">
+    <div class="section-title-row">
+      <h2>Latency per turn · <code>gemini-live-telemetry</code></h2>
+      <a id="telemetry-json-link" class="mini-link" href="/api/telemetry" target="_blank" rel="noopener">/api/telemetry ↗</a>
+    </div>
+
+    <div class="session-summary latency-summary">
+      <div><span class="big" id="lat-avg-ttfb">—</span><span class="label">avg TTFB (ms)</span></div>
+      <div><span class="big" id="lat-p95-ttfb">—</span><span class="label">p95 TTFB (ms)</span></div>
+      <div><span class="big" id="lat-avg-dur">—</span><span class="label">avg turn (ms)</span></div>
+      <div><span class="big" id="lat-setup">—</span><span class="label">setup / tool (ms)</span></div>
+    </div>
+
+    <div class="growth-box">
+      <div class="growth-head">
+        <span>Turn TTFB latency (ms)</span>
+        <span class="muted">last <span id="lat-last">—</span> · peak <span id="latency-max">0 ms</span></span>
+      </div>
+      <svg id="latency-chart" viewBox="0 0 260 64" preserveAspectRatio="none"></svg>
+      <p class="muted small">
+        Time-To-First-Byte (TTFB) per turn exported to OTel &amp; Cloud Monitoring (<span class="lat-dot ok"></span>&lt;500ms <span class="lat-dot warn"></span>500–1000ms <span class="lat-dot bad"></span>&gt;1000ms).
+      </p>
+    </div>
+
     <h2>Tokens &amp; cost</h2>
 
     <div class="session-summary">

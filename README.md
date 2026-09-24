@@ -5,17 +5,19 @@ A production-ready, config-driven **Gemini Live API** voice agent built on **Goo
 1. **Agent Identity & Strict Gender Consistency (`agent.name` & `agent.gender`)** — Prevents mixing male and female voices or grammatical verb forms across all 30 prebuilt Gemini voices and 70 languages (including gendered Indian languages like Hindi, Hinglish, Marathi, Gujarati, Punjabi, and Urdu).
 2. **Default Indian Accent with Dynamic Language Switching** — Opens in Indian English (`en-IN`) or the browser's locale (`use_client_locale: true`), dynamically switches language mid-conversation (`language_mode: follow_user`) as soon as the user does, and preserves a warm Indian vocal accent (`default_accent: Indian`) across every language.
 3. **Topic Restriction Guardrail (`model.talk_only_about`)** — Enforces domain-scoped conversations via system-instruction rules so the assistant strictly stays within your configured enterprise scope.
-4. **Live MCP Tool Integration & Inline UI Cards** — Connects to remote **Model Context Protocol (MCP)** servers over `streamable_http` (deployed on Cloud Run), curates tools under a token budget, and renders live `.tool-card` call/response cards directly inside the browser conversation stream.
-5. **Honest Token & Context-Rent Accounting** — Tracks per-turn and per-session prompt, cached, response, tool-use, and thinking tokens by modality (`AUDIO` vs `TEXT`), with automatic context-window sliding compression.
+4. **Live MCP Tool Integration & Inline UI Cards** — Connects to remote **Model Context Protocol (MCP)** servers over `streamable_http` (deployed on Cloud Run), curates tools under a token budget, and renders live `.tool-card` call/response cards (with tool round-trip latency in `ms`) directly inside the browser conversation stream.
+5. **Per-Turn Latency & Cloud Monitoring Telemetry (`gemini-live-telemetry`)** — Integrates [`gemini-live-telemetry`](https://pypi.org/project/gemini-live-telemetry/) ([GitHub](https://github.com/kkrishnan90/gemini-live-telemetry)) to automatically instrument `google-genai` `AsyncLive.connect` and `AsyncSession` methods via `wrapt`, exporting 21 OpenTelemetry counters/histograms (`gemini_live.turn.ttfb_ms`, `gemini_live.turn.duration_ms`, `gemini_live.session.setup_latency_ms`, `gemini_live.tool.round_trip_ms`) to **Google Cloud Monitoring** (`Gemini Live API Metrics` dashboard), local JSONL/JSON snapshots (`./metrics/`), `/api/telemetry`, and an interactive **Latency per Turn** bar chart in the Web Console UI.
+6. **Honest Token & Context-Rent Accounting** — Tracks per-turn and per-session prompt, cached, response, tool-use, and thinking tokens by modality (`AUDIO` vs `TEXT`), with automatic context-window sliding compression.
 
 ---
 
-## Live Cloud Run Deployments
+## Live Cloud Run Deployments & Dashboards
 
-| Service | Cloud Run HTTPS Endpoint | Description |
+| Service / Dashboard | HTTPS Endpoint | Description |
 | :--- | :--- | :--- |
-| **Gemini Live Voice Console** | **[`https://gemini-live-app-1047195478355.us-central1.run.app`](https://gemini-live-app-1047195478355.us-central1.run.app)** | Full Web UI & WebSocket relay (`Ananya · Female · Kore`). Because Cloud Run serves over HTTPS, Chrome grants microphone access automatically on any device. |
+| **Gemini Live Voice Console** | **[`https://gemini-live-app-1047195478355.us-central1.run.app`](https://gemini-live-app-1047195478355.us-central1.run.app)** | Full Web UI & WebSocket relay (`Ananya · Female · Kore`) with live per-turn TTFB & duration dashboard. |
 | **Enterprise MCP Tool Server** | **[`https://gemini-live-mcp-tools-1047195478355.us-central1.run.app/mcp`](https://gemini-live-mcp-tools-1047195478355.us-central1.run.app/mcp)** | Stateless `streamable_http` FastMCP server exposing 4 enterprise tools (`lookup_customer_account`, `calculate_loan_emi`, `create_support_ticket`, `get_platform_service_status`). |
+| **GCP Cloud Monitoring Dashboard** | **[`Gemini Live API Metrics` (`mb-poc-352009`)](https://console.cloud.google.com/monitoring/dashboards/builder/505c1d9e-fa06-4663-b4b1-d8d7521558bc?project=mb-poc-352009)** | Auto-provisioned Google Cloud Monitoring dashboard charting P50/P95/P99 TTFB, turn duration, session setup latency, and tool round-trip times. |
 
 ---
 
