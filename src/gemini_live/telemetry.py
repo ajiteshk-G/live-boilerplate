@@ -72,6 +72,20 @@ _GCP_PROJECT: str | None = None
 _ENABLE_GCP_EXPORT: bool = False
 
 
+def _full_metric_type(metric_prefix: str, suffix: str) -> str:
+    """Build a canonical Cloud Monitoring metric type string.
+
+    `gemini-live-telemetry` uses `metric_prefix="workload.googleapis.com"` and
+    names its metrics `workload.googleapis.com/gemini_live.<suffix>`.
+    """
+    prefix = (metric_prefix or "workload.googleapis.com").rstrip("/")
+    if prefix.endswith("gemini_live"):
+        return f"{prefix}.{suffix}"
+    if "googleapis.com" in prefix:
+        return f"{prefix}/gemini_live.{suffix}"
+    return f"workload.googleapis.com/{prefix}.{suffix}"
+
+
 def _export_turn_gauge_to_cloud_monitoring(
     *,
     project_id: str,
@@ -82,17 +96,7 @@ def _export_turn_gauge_to_cloud_monitoring(
     turn_duration_ms: float | None,
 ) -> None:
     """Write per-turn GAUGE metrics (`turn.ttfb_ms` and `turn.duration_ms`) with
-    `session_id` and `turn_number` labels directly to Google Cloud Monitoring.
-
-    Why this is needed in addition to `gemini-live-telemetry`'s OTel Histogram:
-    1. OTel Histograms (`gemini_live.latency.ttfb_ms`) are exported as `DISTRIBUTION`
-       buckets with only `session_id` as a label, merging multiple turns within a
-       15-60s alignment window into a single distribution sample.
-    2. Including `turn_number` (`turn_1`, `turn_2`, ...) as a label on a `GAUGE`
-       (`DOUBLE`) metric creates a unique time series per turn, bypassing the 10s
-       same-series rate limit and allowing Cloud Monitoring charts to plot every
-       individual turn (`session_id` + `turn_number`).
-    """
+    `session_id` and `turn_number` labels directly to Google Cloud Monitoring."""
     try:
         from google.api import metric_pb2, monitored_resource_pb2
         from google.cloud import monitoring_v3
@@ -126,7 +130,7 @@ def _export_turn_gauge_to_cloud_monitoring(
             series_list.append(
                 monitoring_v3.TimeSeries(
                     metric=metric_pb2.Metric(
-                        type=f"workload.googleapis.com/{metric_prefix}.turn.ttfb_ms",
+                        type=_full_metric_type(metric_prefix, "turn.ttfb_ms"),
                         labels={
                             "session_id": session_id,
                             "turn_number": turn_label,
@@ -148,7 +152,7 @@ def _export_turn_gauge_to_cloud_monitoring(
             series_list.append(
                 monitoring_v3.TimeSeries(
                     metric=metric_pb2.Metric(
-                        type=f"workload.googleapis.com/{metric_prefix}.turn.duration_ms",
+                        type=_full_metric_type(metric_prefix, "turn.duration_ms"),
                         labels={
                             "session_id": session_id,
                             "turn_number": turn_label,
@@ -177,27 +181,21 @@ def _export_turn_gauge_to_cloud_monitoring(
 def _ensure_per_turn_dashboard_widgets(
     project_id: str, dashboard_name: str, metric_prefix: str
 ) -> str | None:
-    """Ensure the Cloud Monitoring dashboard includes a 'Per-Turn Latency (by Turn #)'
-    row plotting `gemini_live.turn.ttfb_ms` and `gemini_live.latency.ttfb_ms` grouped
-    by `session_id` and `turn_number` / `vad_mode`."""
+    """Ensure the Cloud Monitoring dashboard retains ALL 12 original
+    `gemini-live-telemetry` widgets in `grid_layout` AND adds Per-Turn TTFB &
+    Duration widgets (`gemini_live.turn.ttfb_ms` & `gemini_live.turn.duration_ms`)."""
     if not project_id:
         return None
     try:
         import contextlib
-        import json
 
         from gemini_live_telemetry._dashboard import _build_dashboard
         from google.api import label_pb2, metric_pb2
         from google.cloud import monitoring_v3
         from google.cloud.monitoring_dashboard_v1 import DashboardsServiceClient
-        from google.cloud.monitoring_dashboard_v1 import types as dashboard_types
-        from google.cloud.monitoring_dashboard_v1.types import (
-            Dashboard,
-            UpdateDashboardRequest,
-        )
+        from google.cloud.monitoring_dashboard_v1 import types as dtypes
+        from google.cloud.monitoring_dashboard_v1.types import UpdateDashboardRequest
 
-        # Explicitly register MetricDescriptors for per-turn GAUGE metrics so Cloud
-        # Monitoring indexes `session_id` and `turn_number` labels immediately.
         mclient = monitoring_v3.MetricServiceClient()
         for m_suffix, m_disp in (
             ("turn.ttfb_ms", "Per-Turn TTFB Latency (ms)"),
@@ -207,7 +205,7 @@ def _ensure_per_turn_dashboard_widgets(
                 mclient.create_metric_descriptor(
                     name=f"projects/{project_id}",
                     metric_descriptor=metric_pb2.MetricDescriptor(
-                        type=f"workload.googleapis.com/{metric_prefix}.{m_suffix}",
+                        type=_full_metric_type(metric_prefix, m_suffix),
                         metric_kind=metric_pb2.MetricDescriptor.MetricKind.GAUGE,
                         value_type=metric_pb2.MetricDescriptor.ValueType.DOUBLE,
                         unit="ms",
@@ -238,144 +236,154 @@ def _ensure_per_turn_dashboard_widgets(
         if target is None:
             return None
 
-        per_turn_title = "Per-Turn TTFB (ms) by Turn #"
-        dash = _build_dashboard(dashboard_name, metric_prefix, dashboard_types)
+        # Build the full 12-widget GridLayout dashboard from gemini-live-telemetry
+        dash = _build_dashboard(dashboard_name, metric_prefix, dtypes)
         dash.name = target.name
         dash.etag = target.etag
-        dash.mosaic_layout.columns = 12
-        for t in dash.mosaic_layout.tiles:
-            t.y_pos = int(t.y_pos) + 5
+
+        ttfb_type = _full_metric_type(metric_prefix, "turn.ttfb_ms")
+        otel_ttfb_type = _full_metric_type(metric_prefix, "latency.ttfb_ms")
+        dur_type = _full_metric_type(metric_prefix, "turn.duration_ms")
+        otel_dur_type = _full_metric_type(metric_prefix, "latency.turn_duration_ms")
 
         legend_tpl = "${metric.labels.session_id} - ${metric.labels.turn_number}"
-        otel_legend_tpl = "${metric.labels.session_id} (${metric.labels.vad_mode})"
-        ttfb_metric = f"workload.googleapis.com/{metric_prefix}.turn.ttfb_ms"
-        otel_ttfb = f"workload.googleapis.com/{metric_prefix}.latency.ttfb_ms"
-        dur_metric = f"workload.googleapis.com/{metric_prefix}.turn.duration_ms"
-        otel_dur = f"workload.googleapis.com/{metric_prefix}.latency.turn_duration_ms"
-        per_turn_tiles = [
-            {
-                "xPos": 0,
-                "yPos": 0,
-                "width": 12,
-                "height": 1,
-                "widget": {
-                    "text": {
-                        "content": (
-                            "## Per-Turn Latency Breakdown "
-                            "(Individual Turns by `session_id` & `turn_number`)"
+        otel_legend = "${metric.labels.session_id} (${metric.labels.vad_mode})"
+
+        widget_per_turn_ttfb = dtypes.Widget(
+            title="Per-Turn TTFB (ms) by Turn #",
+            xy_chart=dtypes.XyChart(
+                data_sets=[
+                    dtypes.XyChart.DataSet(
+                        legend_template=legend_tpl,
+                        plot_type=dtypes.XyChart.DataSet.PlotType.LINE,
+                        time_series_query=dtypes.TimeSeriesQuery(
+                            time_series_filter=dtypes.TimeSeriesFilter(
+                                filter=f'metric.type="{ttfb_type}"',
+                                aggregation=dtypes.Aggregation(
+                                    alignment_period={"seconds": 60},
+                                    per_series_aligner=dtypes.Aggregation.Aligner.ALIGN_MAX,
+                                    cross_series_reducer=dtypes.Aggregation.Reducer.REDUCE_MAX,
+                                    group_by_fields=[
+                                        "metric.label.session_id",
+                                        "metric.label.turn_number",
+                                    ],
+                                ),
+                            )
                         ),
-                        "format": "MARKDOWN",
-                    }
-                },
-            },
-            {
-                "xPos": 0,
-                "yPos": 1,
-                "width": 6,
-                "height": 4,
-                "widget": {
-                    "title": per_turn_title,
-                    "xyChart": {
-                        "dataSets": [
-                            {
-                                "plotType": "LINE",
-                                "legendTemplate": legend_tpl,
-                                "timeSeriesQuery": {
-                                    "timeSeriesFilter": {
-                                        "filter": f'metric.type="{ttfb_metric}"',
-                                        "aggregation": {
-                                            "alignmentPeriod": "60s",
-                                            "perSeriesAligner": "ALIGN_MAX",
-                                            "crossSeriesReducer": "REDUCE_MAX",
-                                            "groupByFields": [
-                                                'metric.label."session_id"',
-                                                'metric.label."turn_number"',
-                                            ],
-                                        },
-                                    }
-                                },
-                            },
-                            {
-                                "plotType": "LINE",
-                                "legendTemplate": otel_legend_tpl,
-                                "timeSeriesQuery": {
-                                    "timeSeriesFilter": {
-                                        "filter": f'metric.type="{otel_ttfb}"',
-                                        "aggregation": {
-                                            "alignmentPeriod": "60s",
-                                            "perSeriesAligner": "ALIGN_DELTA",
-                                            "crossSeriesReducer": "REDUCE_MEAN",
-                                            "groupByFields": [
-                                                'metric.label."session_id"',
-                                                'metric.label."vad_mode"',
-                                            ],
-                                        },
-                                    }
-                                },
-                            },
-                        ],
-                        "yAxis": {"label": "ms", "scale": "LINEAR"},
-                    },
-                },
-            },
-            {
-                "xPos": 6,
-                "yPos": 1,
-                "width": 6,
-                "height": 4,
-                "widget": {
-                    "title": "Per-Turn Duration (ms) by Turn #",
-                    "xyChart": {
-                        "dataSets": [
-                            {
-                                "plotType": "LINE",
-                                "legendTemplate": legend_tpl,
-                                "timeSeriesQuery": {
-                                    "timeSeriesFilter": {
-                                        "filter": f'metric.type="{dur_metric}"',
-                                        "aggregation": {
-                                            "alignmentPeriod": "60s",
-                                            "perSeriesAligner": "ALIGN_MAX",
-                                            "crossSeriesReducer": "REDUCE_MAX",
-                                            "groupByFields": [
-                                                'metric.label."session_id"',
-                                                'metric.label."turn_number"',
-                                            ],
-                                        },
-                                    }
-                                },
-                            },
-                            {
-                                "plotType": "LINE",
-                                "legendTemplate": "${metric.labels.session_id}",
-                                "timeSeriesQuery": {
-                                    "timeSeriesFilter": {
-                                        "filter": f'metric.type="{otel_dur}"',
-                                        "aggregation": {
-                                            "alignmentPeriod": "60s",
-                                            "perSeriesAligner": "ALIGN_DELTA",
-                                            "crossSeriesReducer": "REDUCE_MEAN",
-                                            "groupByFields": [
-                                                'metric.label."session_id"',
-                                            ],
-                                        },
-                                    }
-                                },
-                            },
-                        ],
-                        "yAxis": {"label": "ms", "scale": "LINEAR"},
-                    },
-                },
-            },
-        ]
-        extra_dash = Dashboard.from_json(
-            json.dumps({"mosaicLayout": {"columns": 12, "tiles": per_turn_tiles}})
+                    ),
+                    dtypes.XyChart.DataSet(
+                        legend_template=otel_legend,
+                        plot_type=dtypes.XyChart.DataSet.PlotType.LINE,
+                        time_series_query=dtypes.TimeSeriesQuery(
+                            time_series_filter=dtypes.TimeSeriesFilter(
+                                filter=f'metric.type="{otel_ttfb_type}"',
+                                aggregation=dtypes.Aggregation(
+                                    alignment_period={"seconds": 60},
+                                    per_series_aligner=dtypes.Aggregation.Aligner.ALIGN_DELTA,
+                                    cross_series_reducer=dtypes.Aggregation.Reducer.REDUCE_MEAN,
+                                    group_by_fields=[
+                                        "metric.label.session_id",
+                                        "metric.label.vad_mode",
+                                    ],
+                                ),
+                            )
+                        ),
+                    ),
+                ],
+                y_axis=dtypes.XyChart.Axis(label="ms"),
+            ),
         )
-        combined_tiles = list(extra_dash.mosaic_layout.tiles) + list(
-            dash.mosaic_layout.tiles
+
+        widget_per_turn_dur = dtypes.Widget(
+            title="Per-Turn Duration (ms) by Turn #",
+            xy_chart=dtypes.XyChart(
+                data_sets=[
+                    dtypes.XyChart.DataSet(
+                        legend_template=legend_tpl,
+                        plot_type=dtypes.XyChart.DataSet.PlotType.LINE,
+                        time_series_query=dtypes.TimeSeriesQuery(
+                            time_series_filter=dtypes.TimeSeriesFilter(
+                                filter=f'metric.type="{dur_type}"',
+                                aggregation=dtypes.Aggregation(
+                                    alignment_period={"seconds": 60},
+                                    per_series_aligner=dtypes.Aggregation.Aligner.ALIGN_MAX,
+                                    cross_series_reducer=dtypes.Aggregation.Reducer.REDUCE_MAX,
+                                    group_by_fields=[
+                                        "metric.label.session_id",
+                                        "metric.label.turn_number",
+                                    ],
+                                ),
+                            )
+                        ),
+                    ),
+                    dtypes.XyChart.DataSet(
+                        legend_template="${metric.labels.session_id}",
+                        plot_type=dtypes.XyChart.DataSet.PlotType.LINE,
+                        time_series_query=dtypes.TimeSeriesQuery(
+                            time_series_filter=dtypes.TimeSeriesFilter(
+                                filter=f'metric.type="{otel_dur_type}"',
+                                aggregation=dtypes.Aggregation(
+                                    alignment_period={"seconds": 60},
+                                    per_series_aligner=dtypes.Aggregation.Aligner.ALIGN_DELTA,
+                                    cross_series_reducer=dtypes.Aggregation.Reducer.REDUCE_MEAN,
+                                    group_by_fields=["metric.label.session_id"],
+                                ),
+                            )
+                        ),
+                    ),
+                ],
+                y_axis=dtypes.XyChart.Axis(label="ms"),
+            ),
         )
-        del dash.mosaic_layout.tiles[:]
-        dash.mosaic_layout.tiles.extend(combined_tiles)
+
+        widget_ttfb_percentiles = dtypes.Widget(
+            title="TTFB Percentiles (P50 / P95 / Max)",
+            xy_chart=dtypes.XyChart(
+                data_sets=[
+                    dtypes.XyChart.DataSet(
+                        legend_template="P50 TTFB",
+                        plot_type=dtypes.XyChart.DataSet.PlotType.LINE,
+                        time_series_query=dtypes.TimeSeriesQuery(
+                            time_series_filter=dtypes.TimeSeriesFilter(
+                                filter=f'metric.type="{otel_ttfb_type}"',
+                                aggregation=dtypes.Aggregation(
+                                    alignment_period={"seconds": 60},
+                                    per_series_aligner=dtypes.Aggregation.Aligner.ALIGN_DELTA,
+                                    cross_series_reducer=dtypes.Aggregation.Reducer.REDUCE_PERCENTILE_50,
+                                ),
+                            )
+                        ),
+                    ),
+                    dtypes.XyChart.DataSet(
+                        legend_template="P95 TTFB",
+                        plot_type=dtypes.XyChart.DataSet.PlotType.LINE,
+                        time_series_query=dtypes.TimeSeriesQuery(
+                            time_series_filter=dtypes.TimeSeriesFilter(
+                                filter=f'metric.type="{otel_ttfb_type}"',
+                                aggregation=dtypes.Aggregation(
+                                    alignment_period={"seconds": 60},
+                                    per_series_aligner=dtypes.Aggregation.Aligner.ALIGN_DELTA,
+                                    cross_series_reducer=dtypes.Aggregation.Reducer.REDUCE_PERCENTILE_95,
+                                ),
+                            )
+                        ),
+                    ),
+                ],
+                y_axis=dtypes.XyChart.Axis(label="ms"),
+            ),
+        )
+
+        # Keep all 12 original widgets in `dash.grid_layout.widgets` (6 scorecards + 6 charts)
+        # and insert the 3 Per-Turn charts right after the 6 scorecards.
+        orig_widgets = list(dash.grid_layout.widgets)
+        combined_widgets = (
+            orig_widgets[:6]
+            + [widget_per_turn_ttfb, widget_per_turn_dur, widget_ttfb_percentiles]
+            + orig_widgets[6:]
+        )
+        del dash.grid_layout.widgets[:]
+        dash.grid_layout.widgets.extend(combined_widgets)
+
         res = client.update_dashboard(request=UpdateDashboardRequest(dashboard=dash))
         return str(res.name)
     except Exception as exc:
