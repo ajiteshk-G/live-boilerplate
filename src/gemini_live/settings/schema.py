@@ -64,7 +64,7 @@ class VertexSection(_Base):
         return self
 
 
-ResponseModality = Literal["AUDIO", "TEXT"]
+ResponseModality = Literal["AUDIO"]
 
 
 def _default_modalities() -> list[ResponseModality]:
@@ -113,14 +113,6 @@ class SpeechSection(_Base):
     The web client passes ``navigator.language``; if it names a language the
     Live API supports it replaces ``language_code`` for that session while
     ``default_accent`` ("Indian") keeps the Indian accent persona intact.
-    """
-
-    enforce_language_in_system_instruction: bool = True
-    """Also state the language rule in the system instruction.
-
-    Required for native-audio models, which ignore ``language_code`` outright.
-    With ``language_mode: follow_user`` this is also what licenses the model to
-    switch languages, so turning it off leaves language entirely to the model.
     """
 
     @field_validator("voice_name")
@@ -181,8 +173,7 @@ class VadSection(_Base):
 
 
 class ThinkingSection(_Base):
-    level: Literal["minimal", "low", "medium", "high"] | None = None
-    budget: int | None = None
+    level: Literal["low", "medium", "high"] | None = None
     include_thoughts: bool = False
 
 
@@ -429,11 +420,7 @@ class AppConfig(_Base):
         if len(self.model.response_modalities) != 1:
             raise ValueError(
                 "The Live API supports exactly one response modality per session "
-                f"(got {self.model.response_modalities!r}). Use ['AUDIO'] or ['TEXT']."
-            )
-        if self.thinking.level and self.thinking.budget is not None:
-            raise ValueError(
-                "Set thinking.level (Gemini 3.x models) OR thinking.budget (2.5 models), not both."
+                f"(got {self.model.response_modalities!r}). Use ['AUDIO']."
             )
         # Enforce strict gender consistency between agent.gender and speech.voice_name
         # so male and female voices/personas are never mixed.

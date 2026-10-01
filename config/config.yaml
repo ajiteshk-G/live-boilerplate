@@ -85,20 +85,18 @@ speech:
   default_accent: Indian
 
   # ---- voice_name: all 30 prebuilt voices grouped by gender ----------------
-  # The eight marked (*) exist on EVERY Live model; the rest require a
-  # native-audio model.
   #
   # FEMALE VOICES (14) -- use when agent.gender is "female":
-  #   Kore (*)      Firm       <-- selected below
-  #   Zephyr (*)    Bright        Leda (*)      Youthful      Aoede (*)    Breezy
+  #   Kore          Firm       <-- selected below
+  #   Zephyr        Bright        Leda          Youthful      Aoede        Breezy
   #   Callirrhoe    Easy-going    Autonoe       Bright        Despina      Smooth
   #   Erinome       Clear         Laomedeia     Upbeat        Achernar     Soft
   #   Gacrux        Mature        Pulcherrima   Forward       Vindemiatrix Gentle
   #   Sulafat       Warm
   #
   # MALE VOICES (16) -- use when agent.gender is "male" (e.g. agent.name: Aarav):
-  #   Puck (*)      Upbeat        Charon (*)    Informative   Fenrir (*)   Excitable
-  #   Orus (*)      Firm          Enceladus     Breathy       Iapetus      Clear
+  #   Puck          Upbeat        Charon        Informative   Fenrir       Excitable
+  #   Orus          Firm          Enceladus     Breathy       Iapetus      Clear
   #   Umbriel       Easy-going    Algieba       Smooth        Algenib      Gravelly
   #   Rasalgethi    Informative   Alnilam       Firm          Schedar      Even
   #   Achird        Friendly      Zubenelgenubi Casual        Sadachbia    Lively
@@ -139,6 +137,8 @@ speech:
   #   uk Ukrainian     ur Urdu          uz Uzbek         vi Vietnamese
   #   zh Chinese       zu Zulu
   #
+  # Gemini 3.8 Live detects language automatically from audio and steers the
+  # opening language + regional accent through the system instruction.
   # In follow_user mode (below) this is the language the call OPENS in and the
   # fallback when the user's language is unclear -- not a hard pin.
   # null = let the model decide from the first thing it hears.
@@ -156,13 +156,6 @@ speech:
   # while `default_accent: Indian` keeps the Indian vocal accent across all
   # languages and `language_mode: follow_user` switches with the user.
   use_client_locale: true
-
-  # Native-audio models (the default model here) IGNORE language_code: they
-  # detect and switch language on their own. Google's documented workaround is
-  # to state the rule in the system instruction, which is what this does -- and
-  # in follow_user mode it is also what tells the model it MAY switch. Turn it
-  # off only to leave language entirely to the model.
-  enforce_language_in_system_instruction: true
 
 
 # -------------------------------------------------------------- transcription
@@ -203,13 +196,11 @@ vad:
   explicit_vad_signal: false
 
 # ------------------------------------------------------------------- thinking
-# Use `level` on Gemini 3.8 Live Extended Thinking (`low` | `medium` | `high`)
-# or 3.1 models, `budget` on legacy 2.5 models - never both.
-# Note: `gemini-3.8-live` omits thinking_config for lowest latency.
+# Only applicable to `gemini-3.8-live-extended-thinking` (`low` | `medium` | `high`).
+# `gemini-3.8-live` does not use `thinking_config` for lowest latency.
 # Thinking tokens are billed and reported separately (usage.thoughts).
 thinking:
-  level: null # low | medium | high (minimal on 3.1 only)
-  budget: null # integer token budget, e.g. 1024 (2.5 models only)
+  level: null # low | medium | high (gemini-3.8-live-extended-thinking only)
   include_thoughts: false
 
 # -------------------------------------------------------------------- session

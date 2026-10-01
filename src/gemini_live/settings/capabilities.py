@@ -1,8 +1,9 @@
-"""Per-model capability matrix.
+"""Per-model capability matrix for Gemini 3.8 Live models.
 
-Live models differ in which config fields they accept. Rather than hard-failing
-on a config that is valid for a sibling model, unsupported fields are dropped
-with a warning so one config file can be shared across models.
+``gemini-3.8-live`` is optimized for low-latency dialogue and omits
+``thinking_config``, while ``gemini-3.8-live-extended-thinking`` supports
+``thinking.level`` (``low`` | ``medium`` | ``high``) and requires non-blocking
+function calling (``behavior="NON_BLOCKING"``).
 """
 
 from __future__ import annotations
@@ -15,23 +16,16 @@ from .schema import AppConfig
 
 @dataclass(frozen=True)
 class Capabilities:
-    thinking_style: str | None  # "level" (3.8-ext / 3.x) | "budget" (2.5) | None (3.8-live)
-    supports_affective_dialog: bool
-    supports_proactivity: bool
-    supports_language_code: bool
-    default_tool_behavior: str | None = None
+    thinking_style: str | None  # "level" (3.8-live-extended-thinking) | None (3.8-live)
+    default_tool_behavior: str = "NON_BLOCKING"
     requires_non_blocking_tools: bool = False
 
 
 _MATRIX: list[tuple[str, Capabilities]] = [
-    # Most specific prefixes first.
     (
         "gemini-3.8-live-extended-thinking",
         Capabilities(
             thinking_style="level",
-            supports_affective_dialog=False,
-            supports_proactivity=False,
-            supports_language_code=False,
             default_tool_behavior="NON_BLOCKING",
             requires_non_blocking_tools=True,
         ),
@@ -40,61 +34,24 @@ _MATRIX: list[tuple[str, Capabilities]] = [
         "gemini-3.8-live",
         Capabilities(
             thinking_style=None,
-            supports_affective_dialog=False,
-            supports_proactivity=False,
-            supports_language_code=False,
             default_tool_behavior="NON_BLOCKING",
             requires_non_blocking_tools=False,
-        ),
-    ),
-    (
-        "gemini-3",
-        Capabilities(
-            thinking_style="level",
-            supports_affective_dialog=False,
-            supports_proactivity=False,
-            supports_language_code=False,
-        ),
-    ),
-    (
-        "gemini-live-2.5",
-        Capabilities(
-            thinking_style="budget",
-            supports_affective_dialog=True,
-            supports_proactivity=True,
-            supports_language_code=False,
-        ),
-    ),
-    (
-        "gemini-2.5",
-        Capabilities(
-            thinking_style="budget",
-            supports_affective_dialog=True,
-            supports_proactivity=True,
-            supports_language_code=True,
         ),
     ),
 ]
 
 _DEFAULT = Capabilities(
-    thinking_style="budget",
-    supports_affective_dialog=False,
-    supports_proactivity=False,
-    supports_language_code=True,
+    thinking_style=None,
+    default_tool_behavior="NON_BLOCKING",
+    requires_non_blocking_tools=False,
 )
 
 
 def capabilities_for(model_name: str) -> Capabilities:
-    from dataclasses import replace
-
-    caps = _DEFAULT
     for prefix, c in _MATRIX:
         if model_name.startswith(prefix):
-            caps = c
-            break
-    if "native-audio" in model_name and caps.supports_language_code:
-        caps = replace(caps, supports_language_code=False)
-    return caps
+            return c
+    return _DEFAULT
 
 
 def filter_for_model(cfg: AppConfig) -> tuple[AppConfig, list[str]]:
@@ -103,33 +60,11 @@ def filter_for_model(cfg: AppConfig) -> tuple[AppConfig, list[str]]:
     warnings: list[str] = []
     out = copy.deepcopy(cfg)
 
-    if caps.thinking_style == "level" and out.thinking.budget is not None:
-        warnings.append(
-            f"{cfg.model.name} uses thinking.level, not thinking.budget; dropping "
-            f"thinking.budget={out.thinking.budget}."
-        )
-        out.thinking.budget = None
-    if (
-        cfg.model.name.startswith("gemini-3.8-live-extended-thinking")
-        and out.thinking.level == "minimal"
-    ):
-        warnings.append(
-            f"{cfg.model.name} does not support thinking.level='minimal' "
-            "(supported: 'low', 'medium', 'high'); using 'low' instead."
-        )
-        out.thinking.level = "low"
-    if caps.thinking_style == "budget" and out.thinking.level is not None:
-        warnings.append(
-            f"{cfg.model.name} uses thinking.budget, not thinking.level; dropping "
-            f"thinking.level={out.thinking.level!r}."
-        )
-        out.thinking.level = None
     if caps.thinking_style is None and (
-        out.thinking.level or out.thinking.budget is not None or out.thinking.include_thoughts
+        out.thinking.level or out.thinking.include_thoughts
     ):
         warnings.append(f"{cfg.model.name} does not support thinking config; dropping it.")
         out.thinking.level = None
-        out.thinking.budget = None
         out.thinking.include_thoughts = False
 
     if caps.requires_non_blocking_tools and out.tools.behavior == "BLOCKING":
@@ -138,42 +73,5 @@ def filter_for_model(cfg: AppConfig) -> tuple[AppConfig, list[str]]:
             "(behavior='NON_BLOCKING'); overriding tools.behavior='BLOCKING'."
         )
         out.tools.behavior = "NON_BLOCKING"
-
-    if not caps.supports_language_code and out.speech.language_code:
-        # The field itself is not accepted, but the requirement still is -- as a
-        # rule in the system instruction, which is Google's documented
-        # workaround for native-audio models.
-        if out.speech.enforce_language_in_system_instruction:
-            mode = (
-                "following the user's language"
-                if out.speech.language_mode == "follow_user"
-                else f"enforcing {out.speech.language_code!r}"
-            )
-            warnings.append(
-                f"{cfg.model.name} detects language automatically and ignores "
-                f"speech.language_code={out.speech.language_code!r}; {mode} through "
-                "the system instruction instead."
-            )
-        else:
-            warnings.append(
-                f"{cfg.model.name} ignores speech.language_code="
-                f"{out.speech.language_code!r} and "
-                "speech.enforce_language_in_system_instruction is false, so the spoken "
-                "language is left entirely to the model."
-            )
-            out.speech.language_code = None
-    elif (
-        caps.supports_language_code
-        and out.speech.language_code
-        and out.speech.language_mode == "follow_user"
-    ):
-        # Here language_code is a fixed synthesis language for the whole
-        # session, so the model cannot follow a user who switches.
-        warnings.append(
-            f"{cfg.model.name} treats speech.language_code="
-            f"{out.speech.language_code!r} as a fixed output language, so "
-            "speech.language_mode='follow_user' can only set the starting language. "
-            "Use a native-audio model for true mid-conversation switching."
-        )
 
     return out, warnings

@@ -165,9 +165,10 @@ def test_no_thinking_config_by_default():
     assert build_live_config(make_cfg()).thinking_config is None
 
 
-def test_thinking_budget_is_applied():
-    live = build_live_config(make_cfg(thinking={"budget": 1024}))
-    assert live.thinking_config.thinking_budget == 1024
+def test_thinking_level_is_applied():
+    live = build_live_config(make_cfg(thinking={"level": "low"}))
+    raw = live.thinking_config.thinking_level
+    assert str(getattr(raw, "value", raw)).lower() == "low"
 
 
 def test_include_thoughts_alone_produces_a_config():

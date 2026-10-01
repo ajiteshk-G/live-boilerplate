@@ -17,7 +17,7 @@ from .live.client import build_client
 from .live.events import CollectingSink
 from .live.runner import LiveSessionRunner
 from .pipeline import ToolPipeline
-from .settings.capabilities import capabilities_for, filter_for_model
+from .settings.capabilities import filter_for_model
 from .settings.loader import ConfigError, load_config
 from .settings.schema import AppConfig, redact
 
@@ -49,20 +49,13 @@ def _setup_logging(cfg: AppConfig) -> None:
 def _make_headless(cfg: AppConfig) -> AppConfig:
     """Configure a config for a text-driven, no-speaker session.
 
-    TEXT is the natural choice, but **native-audio and Gemini 3.8 Live models
-    reject it outright** ("Text output is not supported for native audio output
-    model" / "Unsupported modality for Vertex Live API"), so for those we keep
-    AUDIO and force output transcription on -- the transcript is then the
-    readable reply. Audio bytes are simply discarded by the headless sink.
+    Gemini 3.8 Live models are native-audio models (`response_modalities=["AUDIO"]`),
+    so for headless runs we keep AUDIO and force output transcription on -- the
+    transcript is then the readable reply while audio bytes are discarded by the
+    headless sink.
     """
-    if (
-        "native-audio" in cfg.model.name
-        or not capabilities_for(cfg.model.name).supports_language_code
-    ):
-        cfg.model.response_modalities = ["AUDIO"]
-        cfg.transcription.output = True
-    else:
-        cfg.model.response_modalities = ["TEXT"]
+    cfg.model.response_modalities = ["AUDIO"]
+    cfg.transcription.output = True
     return cfg
 
 
@@ -139,7 +132,6 @@ def voices_cmd(
     from the voice name.
     """
     from .settings.voices import (
-        CORE_VOICES,
         INDIAN_LOCALES,
         LIVE_LANGUAGES,
         LIVE_VOICES,
@@ -150,12 +142,11 @@ def voices_cmd(
     )
 
     cfg = _load(config)
-    caps = capabilities_for(cfg.model.name)
     chosen_voice = cfg.speech.voice_name
     chosen_lang = cfg.speech.language_code
 
     voice_table = Table(
-        "voice", "gender", "character", "every model?", title="VOICES (30)"
+        "voice", "gender", "character", title="VOICES (30)"
     )
     for name, character in LIVE_VOICES.items():
         selected = name == chosen_voice
@@ -164,7 +155,6 @@ def voices_cmd(
             f"[green]{name} \u2190 selected[/green]" if selected else name,
             gender,
             character,
-            "yes" if name in CORE_VOICES else "native-audio only",
         )
     console.print(voice_table)
 
@@ -217,21 +207,13 @@ def voices_cmd(
             "language per session (speech.use_client_locale).[/dim]"
         )
 
-    if chosen_lang and not caps.supports_language_code:
-        console.print(
-            "\n[yellow]This model ignores speech.language_code[/yellow] (native audio "
-            "picks the language itself). "
-            + (
-                "The system instruction carries it instead:"
-                if cfg.speech.enforce_language_in_system_instruction
-                else "speech.enforce_language_in_system_instruction is false, so nothing "
-                "steers the language."
-            )
+    if chosen_lang:
+        directive = language_directive(
+            chosen_lang,
+            follow_user=follow_user,
+            default_accent=cfg.speech.default_accent,
         )
-        if cfg.speech.enforce_language_in_system_instruction:
-            console.print(
-                f"[dim]{language_directive(chosen_lang, follow_user=follow_user)}[/dim]"
-            )
+        console.print(f"\n[dim]{directive}[/dim]")
 
 
 

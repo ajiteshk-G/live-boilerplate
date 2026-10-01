@@ -99,15 +99,6 @@ MALE_VOICES: frozenset[str] = frozenset(
     name for name, gender in VOICE_GENDERS.items() if gender == "male"
 )
 
-CORE_VOICES: frozenset[str] = frozenset(
-    {"Puck", "Charon", "Kore", "Fenrir", "Aoede", "Leda", "Orus", "Zephyr"}
-)
-"""The eight voices every Live model accepts.
-
-The other 22 arrived with native audio. Staying inside this set keeps one config
-file valid across both model families.
-"""
-
 _VOICES_BY_LOWER = {name.lower(): name for name in LIVE_VOICES}
 
 

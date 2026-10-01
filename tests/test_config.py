@@ -109,18 +109,19 @@ def test_error_message_explains_the_strictness(write_config):
 # -------------------------------------------------------------- coherence
 
 
-def test_two_response_modalities_are_rejected():
-    """The Live API permits exactly one per session."""
-    with pytest.raises(ValueError, match="exactly one response modality"):
+def test_non_audio_response_modality_is_rejected():
+    """Gemini 3.8 Live models are native-audio and only support ['AUDIO']."""
+    with pytest.raises(ValidationError):
         AppConfig.model_validate(
-            {"vertex": {"project": "p"}, "model": {"response_modalities": ["AUDIO", "TEXT"]}}
+            {"vertex": {"project": "p"}, "model": {"response_modalities": ["TEXT"]}}
         )
 
 
-def test_thinking_level_and_budget_together_are_rejected():
-    with pytest.raises(ValueError, match="not both"):
+def test_thinking_level_minimal_is_rejected():
+    """Gemini 3.8 Live Extended Thinking only supports low, medium, and high."""
+    with pytest.raises(ValidationError):
         AppConfig.model_validate(
-            {"vertex": {"project": "p"}, "thinking": {"level": "low", "budget": 1024}}
+            {"vertex": {"project": "p"}, "thinking": {"level": "minimal"}}
         )
 
 
@@ -227,17 +228,16 @@ def test_redact_masks_credentials():
 
 
 @pytest.mark.parametrize(
-    ("model", "style"),
+    ("model", "style", "requires_non_blocking"),
     [
-        ("gemini-3.8-live", None),
-        ("gemini-3.8-live-extended-thinking", "level"),
-        ("gemini-3-pro-preview", "level"),
-        ("gemini-live-2.5-flash-native-audio", "budget"),
-        ("gemini-2.5-flash", "budget"),
+        ("gemini-3.8-live", None, False),
+        ("gemini-3.8-live-extended-thinking", "level", True),
     ],
 )
-def test_thinking_style_by_model_family(model, style):
-    assert capabilities_for(model).thinking_style == style
+def test_thinking_style_by_model_family(model, style, requires_non_blocking):
+    caps = capabilities_for(model)
+    assert caps.thinking_style == style
+    assert caps.requires_non_blocking_tools is requires_non_blocking
 
 
 def test_default_model_is_gemini_3_8_live():
@@ -250,7 +250,6 @@ def test_gemini_3_8_live_drops_thinking_config_with_warning():
         {
             "vertex": {"project": "p"},
             "model": {"name": "gemini-3.8-live"},
-            "speech": {"language_code": None},
             "thinking": {"level": "low"},
         }
     )
@@ -261,13 +260,12 @@ def test_gemini_3_8_live_drops_thinking_config_with_warning():
     assert "does not support thinking config" in warnings[0]
 
 
-def test_gemini_3_8_live_extended_thinking_coerces_minimal_and_blocking():
+def test_gemini_3_8_live_extended_thinking_coerces_blocking_tools():
     cfg = AppConfig.model_validate(
         {
             "vertex": {"project": "p"},
             "model": {"name": "gemini-3.8-live-extended-thinking"},
-            "speech": {"language_code": None},
-            "thinking": {"level": "minimal"},
+            "thinking": {"level": "low"},
             "tools": {"behavior": "BLOCKING"},
         }
     )
@@ -275,108 +273,42 @@ def test_gemini_3_8_live_extended_thinking_coerces_minimal_and_blocking():
 
     assert filtered.thinking.level == "low"
     assert filtered.tools.behavior == "NON_BLOCKING"
-    assert len(warnings) == 2
-
-
-def test_incompatible_thinking_field_is_dropped_with_a_warning():
-    """One config file should work across models, so this warns rather than
-    hard-failing."""
-    cfg = AppConfig.model_validate(
-        {
-            "vertex": {"project": "p"},
-            "model": {"name": "gemini-3-pro-preview"},
-            # Kept out of the way so this test sees only the thinking warning.
-            "speech": {"language_code": None},
-            "thinking": {"budget": 1024},
-        }
-    )
-    filtered, warnings = filter_for_model(cfg)
-
-    assert filtered.thinking.budget is None
     assert len(warnings) == 1
-    assert "thinking.level" in warnings[0]
 
 
 def test_filtering_does_not_mutate_the_original_config():
     cfg = AppConfig.model_validate(
         {
             "vertex": {"project": "p"},
-            "model": {"name": "gemini-3-pro-preview"},
-            "thinking": {"budget": 1024},
+            "model": {"name": "gemini-3.8-live"},
+            "thinking": {"level": "low"},
         }
     )
     filter_for_model(cfg)
-    assert cfg.thinking.budget == 1024
-
-
-def test_language_code_survives_for_native_audio_to_reach_the_system_instruction():
-    """Native audio ignores the field, but the requirement must not be lost:
-    build_live_config turns it into a system-instruction rule."""
-    cfg = AppConfig.model_validate(
-        {
-            "vertex": {"project": "p"},
-            "model": {"name": "gemini-live-2.5-flash-native-audio"},
-            "speech": {"language_code": "en-IN"},
-        }
-    )
-    filtered, warnings = filter_for_model(cfg)
-
-    assert filtered.speech.language_code == "en-IN"
-    assert any("system instruction" in w for w in warnings)
-
-
-def test_language_code_dropped_when_system_instruction_enforcement_is_off():
-    cfg = AppConfig.model_validate(
-        {
-            "vertex": {"project": "p"},
-            "model": {"name": "gemini-live-2.5-flash-native-audio"},
-            "speech": {
-                "language_code": "en-IN",
-                "enforce_language_in_system_instruction": False,
-            },
-        }
-    )
-    filtered, warnings = filter_for_model(cfg)
-
-    assert filtered.speech.language_code is None
-    assert any("language" in w for w in warnings)
-
-
-def test_language_code_is_untouched_on_models_that_accept_it():
-    cfg = AppConfig.model_validate(
-        {
-            "vertex": {"project": "p"},
-            "model": {"name": "gemini-2.5-flash"},
-            # Pinned: follow_user on this model family raises its own advisory.
-            "speech": {"language_code": "hi-IN", "language_mode": "pinned"},
-        }
-    )
-    filtered, warnings = filter_for_model(cfg)
-
-    assert filtered.speech.language_code == "hi-IN"
-    assert warnings == []
+    assert cfg.thinking.level == "low"
 
 
 def test_compatible_config_produces_no_warnings():
     cfg = AppConfig.model_validate(
         {
             "vertex": {"project": "p"},
-            "model": {"name": "gemini-live-2.5-flash-native-audio"},
-            "speech": {"language_code": None},
-            "thinking": {"budget": 512},
+            "model": {"name": "gemini-3.8-live"},
+            "speech": {"language_code": "en-IN"},
         }
     )
     filtered, warnings = filter_for_model(cfg)
 
     assert warnings == []
-    assert filtered.thinking.budget == 512
+    assert filtered.speech.language_code == "en-IN"
 
 
 def test_shipped_reference_config_is_valid(monkeypatch):
-    """config/config.yaml must stay in sync with the schema."""
+    """config/config.yaml must stay in sync with the schema and emit zero warnings."""
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
     cfg = load_config("config/config.yaml", env_file=None)
     assert cfg.vertex.project == "test-project"
+    _, warnings = filter_for_model(cfg)
+    assert warnings == []
 
 
 def test_shipped_minimal_config_is_valid(monkeypatch):
@@ -412,11 +344,8 @@ def test_explicit_cors_origins_are_left_alone():
 
 # ------------------------------------------------------- no aspirational knobs
 
-# These keys were once declared and documented but never read by any code.
-# `extra="forbid"` now rejects them, which is the point: a config that promises
-# behaviour it does not implement is worse than one that omits it. Most of all
-# `search.enforcement: strict_buffered`, which advertised a citation gate that
-# did not exist.
+# These keys were once declared and documented (or belonged to legacy 2.5 models)
+# and are now rejected by `extra="forbid"`.
 
 
 @pytest.mark.parametrize(
@@ -427,6 +356,8 @@ def test_explicit_cors_origins_are_left_alone():
         {"tools": {"adaptive": {"enabled": True}}},
         {"usage": {"report": {"per_turn": True}}},
         {"search": {"enforcement": "strict_buffered"}},
+        {"thinking": {"budget": 1024}},
+        {"speech": {"enforce_language_in_system_instruction": True}},
     ],
 )
 def test_removed_dead_keys_are_rejected_not_silently_ignored(payload):

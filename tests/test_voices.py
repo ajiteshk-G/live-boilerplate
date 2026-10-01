@@ -13,7 +13,6 @@ from gemini_live.live.connect_config import build_live_config, build_system_inst
 from gemini_live.search.domain_policy import DomainPolicy
 from gemini_live.settings.schema import AppConfig
 from gemini_live.settings.voices import (
-    CORE_VOICES,
     INDIAN_LOCALES,
     LIVE_LANGUAGES,
     LIVE_VOICES,
@@ -36,9 +35,6 @@ def make_cfg(**over):
 def test_catalog_matches_the_documented_counts():
     assert len(LIVE_VOICES) == 30
     assert len(LIVE_LANGUAGES) == 70
-    # The eight legacy voices work on every Live model, native audio or not.
-    assert set(LIVE_VOICES) >= CORE_VOICES
-    assert len(CORE_VOICES) == 8
 
 
 def test_every_indian_locale_resolves_to_a_supported_language():
@@ -80,7 +76,6 @@ def test_regional_variants_of_supported_languages_are_accepted():
 def test_the_shipped_default_is_indian_english():
     cfg = make_cfg()
     assert cfg.speech.language_code == "en-IN"
-    assert cfg.speech.enforce_language_in_system_instruction is True
 
 
 # -------------------------------------------------------------- wiring to live
@@ -88,7 +83,6 @@ def test_the_shipped_default_is_indian_english():
 
 def test_pinned_mode_puts_the_indian_language_in_the_system_instruction():
     cfg = make_cfg(
-        model={"name": "gemini-live-2.5-flash-native-audio"},
         speech={"language_code": "en-IN", "language_mode": "pinned"},
     )
     text = build_system_instruction(cfg, DomainPolicy())
@@ -100,7 +94,6 @@ def test_pinned_mode_puts_the_indian_language_in_the_system_instruction():
 def test_follow_user_mode_tells_the_model_to_switch_with_the_user():
     """The default: en-IN is only where the call opens."""
     cfg = make_cfg(
-        model={"name": "gemini-live-2.5-flash-native-audio"},
         speech={"language_code": "en-IN"},
     )
     text = build_system_instruction(cfg, DomainPolicy())
@@ -127,36 +120,23 @@ def test_language_directive_only_claims_an_accent_for_indian_locales():
     assert "Indian accent" not in language_directive("en-US")
 
 
-def test_no_directive_when_enforcement_is_disabled():
-    cfg = make_cfg(
-        speech={"language_code": "en-IN", "enforce_language_in_system_instruction": False}
-    )
+def test_no_directive_when_language_code_is_null():
+    cfg = make_cfg(speech={"language_code": None})
     text = build_system_instruction(cfg, DomainPolicy())
     assert "ENGLISH (INDIA)" not in text
     assert "SPEAK THE USER'S LANGUAGE" not in text
 
 
-def test_native_audio_models_are_not_sent_the_unsupported_language_field():
-    """Sending language_code to a native-audio model is a config error, even
-    though the config still carries it for the system-instruction path."""
+def test_gemini_3_8_live_does_not_send_speech_config_language_code():
+    """Gemini 3.8 Live ignores SpeechConfig.language_code on the wire and uses
+    the system instruction + transcription.language_codes instead."""
     cfg = make_cfg(
-        model={"name": "gemini-live-2.5-flash-native-audio"},
         speech={"voice_name": "Kore", "language_code": "en-IN"},
     )
     live = build_live_config(cfg)
 
     assert live.speech_config.voice_config.prebuilt_voice_config.voice_name == "Kore"
     assert live.speech_config.language_code is None
-
-
-def test_models_that_support_language_code_receive_it():
-    cfg = make_cfg(
-        model={"name": "gemini-2.5-flash"},
-        speech={"voice_name": "Leda", "language_code": "hi-IN"},
-    )
-    live = build_live_config(cfg)
-
-    assert live.speech_config.language_code == "hi-IN"
 
 
 # ------------------------------------------------------------- client locale
@@ -214,24 +194,11 @@ def test_client_locale_can_be_switched_off():
 def test_the_callers_language_reaches_the_system_instruction():
     """End to end: a Hindi browser should get a session that opens in Hindi."""
     cfg = make_cfg(
-        model={"name": "gemini-live-2.5-flash-native-audio"},
         speech={"language_code": "en-IN"},
     ).for_client_locale("hi-IN")
 
     text = build_system_instruction(cfg, DomainPolicy())
     assert "Open the conversation in Hindi (India)" in text
-
-
-def test_follow_user_warns_on_models_that_fix_the_output_language():
-    from gemini_live.settings.capabilities import filter_for_model
-
-    cfg = make_cfg(
-        model={"name": "gemini-2.5-flash"},
-        speech={"language_code": "en-IN", "language_mode": "follow_user"},
-    )
-    _, warnings = filter_for_model(cfg)
-
-    assert any("fixed output language" in w for w in warnings)
 
 
 # ------------------------------------------------------- agent name & gender

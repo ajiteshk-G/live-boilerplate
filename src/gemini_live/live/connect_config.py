@@ -50,10 +50,9 @@ def build_system_instruction(cfg: AppConfig, policy: DomainPolicy) -> str:
             f'If the user asks about anything outside "{topic}", politely decline and '
             f'remind them that you can only assist with "{topic}".'
         )
-    # Native-audio models ignore speech.language_code and pick a language
-    # themselves, so the language contract has to live in the prompt -- both to
-    # pin a language and (in follow_user mode) to license switching.
-    if cfg.speech.language_code and cfg.speech.enforce_language_in_system_instruction:
+    # Gemini 3.8 Live detects language automatically from audio and steers the
+    # opening language and regional accent through the system instruction.
+    if cfg.speech.language_code:
         text = (
             f"{text}\n"
             + language_directive(
@@ -95,18 +94,13 @@ def build_live_config(
 
     # --- voice -------------------------------------------------------------
     if cfg.speech.voice_name:
-        speech: dict[str, Any] = {
-            "voice_config": types.VoiceConfig(
+        kwargs["speech_config"] = types.SpeechConfig(
+            voice_config=types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(
                     voice_name=cfg.speech.voice_name
                 )
             )
-        }
-        if cfg.speech.language_code and capabilities_for(cfg.model.name).supports_language_code:
-            # Native-audio models reject this field; for them the language is
-            # carried by the system instruction (see build_system_instruction).
-            speech["language_code"] = cfg.speech.language_code
-        kwargs["speech_config"] = types.SpeechConfig(**speech)
+        )
 
     # --- transcription -----------------------------------------------------
     if cfg.transcription.input:
@@ -141,20 +135,12 @@ def build_live_config(
 
     # --- thinking ----------------------------------------------------------
     thinking: dict[str, Any] = {}
-    if cfg.thinking.budget is not None:
-        thinking["thinking_budget"] = cfg.thinking.budget
     if cfg.thinking.level is not None:
         thinking["thinking_level"] = cfg.thinking.level
     if cfg.thinking.include_thoughts:
         thinking["include_thoughts"] = True
     if thinking:
-        try:
-            kwargs["thinking_config"] = types.ThinkingConfig(**thinking)
-        except TypeError:
-            # Older SDKs lack thinking_level; retry without it rather than crash.
-            thinking.pop("thinking_level", None)
-            if thinking:
-                kwargs["thinking_config"] = types.ThinkingConfig(**thinking)
+        kwargs["thinking_config"] = types.ThinkingConfig(**thinking)
 
     # --- session lifetime --------------------------------------------------
     # Context-window compression is a COST control as much as a quality one:
