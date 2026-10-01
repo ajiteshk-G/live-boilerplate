@@ -215,6 +215,8 @@ def test_function_declarations_are_included():
 
     decls = live.tools[0].function_declarations
     assert {d.name for d in decls} == {"a__x", "b__y"}
+    # Gemini 3.8 Live defaults to asynchronous NON_BLOCKING function calling.
+    assert all(str(getattr(d.behavior, "value", d.behavior)) == "NON_BLOCKING" for d in decls)
 
 
 def test_google_search_tool_is_added_when_enabled():
@@ -255,3 +257,83 @@ def test_no_tools_key_when_nothing_is_configured():
 def test_media_resolution_is_applied():
     live = build_live_config(make_cfg(media={"resolution": "MEDIA_RESOLUTION_MEDIUM"}))
     assert live.media_resolution.value == "MEDIA_RESOLUTION_MEDIUM"
+
+
+# ------------------------------------------- Gemini 3.8 Live best practices
+
+
+def test_tool_retry_directive_is_injected_in_system_instruction():
+    cfg = make_cfg(model={"system_instruction": "Be helpful."})
+    text = build_system_instruction(cfg, DomainPolicy())
+    assert "TOOL CALL & RETRY POLICY:" in text
+    assert "Never issue more than two consecutive function calls" in text
+
+
+def test_transcription_language_codes_and_custom_vocabulary_are_passed():
+    cfg = make_cfg(
+        transcription={
+            "input": True,
+            "output": True,
+            "language_codes": ["en-IN", "hi-IN"],
+            "custom_vocabulary": ["IndTech", "BharatCloud", "UPI"],
+        }
+    )
+    live = build_live_config(cfg)
+    assert live.input_audio_transcription.language_codes == ["en-IN", "hi-IN"]
+    assert live.input_audio_transcription.custom_vocabulary == [
+        "IndTech",
+        "BharatCloud",
+        "UPI",
+    ]
+    assert live.output_audio_transcription.language_codes == ["en-IN", "hi-IN"]
+
+
+def test_explicit_vad_signal_is_passed_when_enabled():
+    assert build_live_config(make_cfg()).explicit_vad_signal is None
+    live = build_live_config(make_cfg(vad={"explicit_vad_signal": True}))
+    assert live.explicit_vad_signal is True
+
+
+def test_transparent_session_resumption_is_enabled_by_default():
+    live = build_live_config(make_cfg(), resumption_handle="h-123")
+    assert live.session_resumption.handle == "h-123"
+    assert live.session_resumption.transparent is True
+
+
+def test_history_config_initial_history_in_client_content():
+    assert build_live_config(make_cfg()).history_config is None
+    live = build_live_config(
+        make_cfg(session={"initial_history_in_client_content": True})
+    )
+    assert live.history_config.initial_history_in_client_content is True
+
+
+async def test_tool_registry_applies_scheduling_and_retryable_metadata():
+    from types import SimpleNamespace
+
+    async def ok_fn(args):
+        return {"value": 42}
+
+    reg = ToolRegistry(
+        [
+            ToolCandidate(
+                exposed_name="crm__lookup",
+                description="Lookup customer",
+                input_schema={"type": "object", "properties": {}},
+                invoke=ok_fn,
+                origin="mcp:crm",
+            )
+        ],
+        scheduling="WHEN_IDLE",
+    )
+    resp = await reg.dispatch(
+        SimpleNamespace(id="c-1", name="crm__lookup", args={})
+    )
+    assert str(getattr(resp.scheduling, "value", resp.scheduling)) == "WHEN_IDLE"
+    assert resp.response == {"value": 42}
+
+    missing = await reg.dispatch(
+        SimpleNamespace(id="c-2", name="crm__unknown", args={})
+    )
+    assert missing.response["status"] == "unavailable_tool"
+    assert missing.response["retryable"] is False

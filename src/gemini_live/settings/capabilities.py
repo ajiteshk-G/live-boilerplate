@@ -15,14 +15,38 @@ from .schema import AppConfig
 
 @dataclass(frozen=True)
 class Capabilities:
-    thinking_style: str | None  # "level" (3.x) | "budget" (2.5) | None
+    thinking_style: str | None  # "level" (3.8-ext / 3.x) | "budget" (2.5) | None (3.8-live)
     supports_affective_dialog: bool
     supports_proactivity: bool
     supports_language_code: bool
+    default_tool_behavior: str | None = None
+    requires_non_blocking_tools: bool = False
 
 
 _MATRIX: list[tuple[str, Capabilities]] = [
     # Most specific prefixes first.
+    (
+        "gemini-3.8-live-extended-thinking",
+        Capabilities(
+            thinking_style="level",
+            supports_affective_dialog=False,
+            supports_proactivity=False,
+            supports_language_code=False,
+            default_tool_behavior="NON_BLOCKING",
+            requires_non_blocking_tools=True,
+        ),
+    ),
+    (
+        "gemini-3.8-live",
+        Capabilities(
+            thinking_style=None,
+            supports_affective_dialog=False,
+            supports_proactivity=False,
+            supports_language_code=False,
+            default_tool_behavior="NON_BLOCKING",
+            requires_non_blocking_tools=False,
+        ),
+    ),
     (
         "gemini-3",
         Capabilities(
@@ -85,16 +109,35 @@ def filter_for_model(cfg: AppConfig) -> tuple[AppConfig, list[str]]:
             f"thinking.budget={out.thinking.budget}."
         )
         out.thinking.budget = None
+    if (
+        cfg.model.name.startswith("gemini-3.8-live-extended-thinking")
+        and out.thinking.level == "minimal"
+    ):
+        warnings.append(
+            f"{cfg.model.name} does not support thinking.level='minimal' "
+            "(supported: 'low', 'medium', 'high'); using 'low' instead."
+        )
+        out.thinking.level = "low"
     if caps.thinking_style == "budget" and out.thinking.level is not None:
         warnings.append(
             f"{cfg.model.name} uses thinking.budget, not thinking.level; dropping "
             f"thinking.level={out.thinking.level!r}."
         )
         out.thinking.level = None
-    if caps.thinking_style is None and (out.thinking.level or out.thinking.budget is not None):
+    if caps.thinking_style is None and (
+        out.thinking.level or out.thinking.budget is not None or out.thinking.include_thoughts
+    ):
         warnings.append(f"{cfg.model.name} does not support thinking config; dropping it.")
         out.thinking.level = None
         out.thinking.budget = None
+        out.thinking.include_thoughts = False
+
+    if caps.requires_non_blocking_tools and out.tools.behavior == "BLOCKING":
+        warnings.append(
+            f"{cfg.model.name} requires asynchronous function calling "
+            "(behavior='NON_BLOCKING'); overriding tools.behavior='BLOCKING'."
+        )
+        out.tools.behavior = "NON_BLOCKING"
 
     if not caps.supports_language_code and out.speech.language_code:
         # The field itself is not accepted, but the requirement still is -- as a

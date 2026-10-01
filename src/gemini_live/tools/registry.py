@@ -26,9 +26,11 @@ class ToolRegistry:
         candidates: list[ToolCandidate],
         *,
         timeout_s: float = DEFAULT_TOOL_TIMEOUT_S,
+        scheduling: str | None = None,
     ) -> None:
         self._by_name: dict[str, ToolCandidate] = {c.exposed_name: c for c in candidates}
         self._timeout = timeout_s
+        self._scheduling = scheduling
 
     @classmethod
     def from_selection(cls, selection: Selection, **kwargs: Any) -> ToolRegistry:
@@ -45,20 +47,22 @@ class ToolRegistry:
     def total_declaration_tokens(self) -> int:
         return sum(c.token_cost for c in self._by_name.values())
 
-    def declarations(self) -> list[Any]:
+    def declarations(self, *, behavior: str | None = None) -> list[Any]:
         """One ``types.Tool`` bundling every permitted declaration (or [])."""
         from google.genai import types
 
         if not self._by_name:
             return []
-        decls = [
-            types.FunctionDeclaration(
-                name=c.exposed_name,
-                description=c.description,
-                parameters_json_schema=c.input_schema,
-            )
-            for c in self._by_name.values()
-        ]
+        decls = []
+        for c in self._by_name.values():
+            fd_kwargs: dict[str, Any] = {
+                "name": c.exposed_name,
+                "description": c.description,
+                "parameters_json_schema": c.input_schema,
+            }
+            if behavior is not None:
+                fd_kwargs["behavior"] = behavior
+            decls.append(types.FunctionDeclaration(**fd_kwargs))
         return [types.Tool(function_declarations=decls)]
 
     async def dispatch(self, function_call: Any) -> Any:
@@ -79,20 +83,41 @@ class ToolRegistry:
             # curated session deliberately excludes most of the catalog.
             log.warning("model called unavailable tool %r", name)
             payload: dict[str, Any] = {
-                "error": f"Tool '{name}' is not available in this session."
+                "status": "unavailable_tool",
+                "retryable": False,
+                "available_tools": self.names,
+                "error": (
+                    f"Tool '{name}' is not available in this session. "
+                    "Do not retry this tool name."
+                ),
             }
         else:
             try:
                 payload = await asyncio.wait_for(tool.invoke(args), timeout=self._timeout)
             except TimeoutError:
-                payload = {"error": f"Tool '{name}' timed out after {self._timeout:.0f}s."}
+                payload = {
+                    "status": "timeout",
+                    "retryable": True,
+                    "error": f"Tool '{name}' timed out after {self._timeout:.0f}s.",
+                }
             except Exception as exc:
                 log.exception("tool %r raised", name)
-                payload = {"error": f"{type(exc).__name__}: {exc}"}
+                payload = {
+                    "status": "error",
+                    "retryable": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
 
         # Echoing the call id is mandatory: the Live API matches responses to
         # calls by id, and omitting it wedges the turn.
-        return types.FunctionResponse(id=call_id, name=name, response=payload)
+        fr_kwargs: dict[str, Any] = {
+            "id": call_id,
+            "name": name,
+            "response": payload,
+        }
+        if self._scheduling is not None:
+            fr_kwargs["scheduling"] = self._scheduling
+        return types.FunctionResponse(**fr_kwargs)
 
     async def dispatch_all(self, function_calls: list[Any]) -> list[Any]:
         if not function_calls:

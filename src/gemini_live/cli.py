@@ -49,12 +49,16 @@ def _setup_logging(cfg: AppConfig) -> None:
 def _make_headless(cfg: AppConfig) -> AppConfig:
     """Configure a config for a text-driven, no-speaker session.
 
-    TEXT is the natural choice, but **native-audio models reject it outright**
-    ("Text output is not supported for native audio output model"), so for those
-    we keep AUDIO and force output transcription on -- the transcript is then the
+    TEXT is the natural choice, but **native-audio and Gemini 3.8 Live models
+    reject it outright** ("Text output is not supported for native audio output
+    model" / "Unsupported modality for Vertex Live API"), so for those we keep
+    AUDIO and force output transcription on -- the transcript is then the
     readable reply. Audio bytes are simply discarded by the headless sink.
     """
-    if "native-audio" in cfg.model.name:
+    if (
+        "native-audio" in cfg.model.name
+        or not capabilities_for(cfg.model.name).supports_language_code
+    ):
         cfg.model.response_modalities = ["AUDIO"]
         cfg.transcription.output = True
     else:

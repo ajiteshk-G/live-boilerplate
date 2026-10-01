@@ -39,18 +39,23 @@ vertex:
 
 # ---------------------------------------------------------------------- model
 model:
-  name: gemini-live-2.5-flash-native-audio
+  # Current Gemini 3.8 Live models:
+  #   gemini-3.8-live                   - Default low-latency voice agent model
+  #   gemini-3.8-live-extended-thinking - Background reasoning & conversational fillers
+  name: gemini-3.8-live
 
   # The Live API permits EXACTLY ONE response modality per session.
-  # ["AUDIO"] for a voice call, ["TEXT"] for a text-only session.
+  # ["AUDIO"] is required for native-audio models (gemini-3.8-live / gemini-3.8-live-extended-thinking).
   response_modalities: ["AUDIO"]
 
   system_instruction: |
     You are a helpful, concise enterprise voice assistant with access to live CRM,
     financial EMI calculation, support ticketing, and cloud platform status tools.
-    Keep spoken answers short - two or three sentences unless the user asks
-    for detail. When you use a tool, briefly say what you are doing and report
-    the exact figures or ticket IDs returned.
+    Keep spoken answers short and conversational - two or three sentences (under
+    100 words / 50 seconds) unless the user asks for detail, so speech pacing stays
+    steady. When reading out customer IDs, ticket IDs, or phone numbers, speak
+    digit sequences clearly. When you use a tool, briefly say what you are doing
+    and report the exact figures or ticket IDs returned.
 
   # Restrict the assistant to ONLY discuss this topic/domain.
   # If the user asks about anything outside this scope, the assistant politely
@@ -164,26 +169,47 @@ speech:
 # Server-side transcripts of what was heard and what was said. These are what
 # populate the conversation panel in the web UI; turning both off leaves you
 # with audio only and no text record.
+#
+# Gemini 3.8 Live supports `language_codes` (BCP-47 hints) and `custom_vocabulary`
+# (up to 1,000 domain terms, product names, or acronyms) on AudioTranscriptionConfig.
 transcription:
   input: true
   output: true
+  language_codes: ["en-IN", "hi-IN"]
+  custom_vocabulary:
+    - "IndTech"
+    - "BharatCloud"
+    - "FinSetu"
+    - "Prana"
+    - "CUST-1001"
+    - "CUST-1002"
+    - "CUST-1003"
+    - "CUST-1004"
+    - "EMI"
+    - "NPCI"
+    - "UPI"
 
 # ------------------------------------------------------------------------ vad
 # Automatic voice activity detection: the server decides when you stopped
-# speaking. Disable only if you intend to drive turn-taking manually.
+# speaking. Disable only if you intend to drive turn-taking manually via
+# `activity_start` and `activity_end` client events.
 vad:
   enabled: true
   start_sensitivity: START_SENSITIVITY_HIGH # HIGH detects speech more eagerly
   end_sensitivity: END_SENSITIVITY_LOW # LOW waits longer before ending a turn
   prefix_padding_ms: 20
   silence_duration_ms: 400
+  # Set true to receive explicit server-side VAD events (VAD_SIGNAL_TYPE_SOS / EOS).
+  explicit_vad_signal: false
 
 # ------------------------------------------------------------------- thinking
-# Use `level` on Gemini 3.x models, `budget` on 2.5-era models - never both.
+# Use `level` on Gemini 3.8 Live Extended Thinking (`low` | `medium` | `high`)
+# or 3.1 models, `budget` on legacy 2.5 models - never both.
+# Note: `gemini-3.8-live` omits thinking_config for lowest latency.
 # Thinking tokens are billed and reported separately (usage.thoughts).
 thinking:
-  level: null # minimal | low | medium | high
-  budget: null # integer token budget, e.g. 1024
+  level: null # low | medium | high (minimal on 3.1 only)
+  budget: null # integer token budget, e.g. 1024 (2.5 models only)
   include_thoughts: false
 
 # -------------------------------------------------------------------- session
@@ -197,9 +223,11 @@ session:
     sliding_window_target_tokens: 12800
 
   # Lets the runner transparently reconnect after a dropped socket or a
-  # GoAway, keeping conversation state.
+  # GoAway, keeping conversation state. `transparent: true` enables
+  # `last_consumed_client_message_index` tracking for lossless replay.
   resumption:
     enabled: true
+    transparent: true
 
   # Applies only when resumption is on - without a handle, reconnecting would
   # silently lose the conversation. max_attempts counts CONSECUTIVE failures
@@ -208,6 +236,10 @@ session:
     max_attempts: 3
     initial_backoff_seconds: 2.0
     max_backoff_seconds: 8.0
+
+  # Set true when seeding multi-turn conversation history via send_client_content
+  # at the start of a session (HistoryConfig.initial_history_in_client_content).
+  initial_history_in_client_content: false
 
 # ---------------------------------------------------------------------- media
 media:
@@ -269,6 +301,22 @@ telemetry:
 
 # ---------------------------------------------------------------------- tools
 tools:
+  # Asynchronous function calling (`NON_BLOCKING`) is the default on Gemini 3.8
+  # Live and mandatory on `gemini-3.8-live-extended-thinking`. Set `BLOCKING`
+  # only when synchronous tool execution is needed on `gemini-3.8-live`.
+  behavior: NON_BLOCKING # NON_BLOCKING | BLOCKING | null
+
+  # Scheduling policy for asynchronous (`NON_BLOCKING`) FunctionResponse payloads:
+  #   WHEN_IDLE - wait until the model finishes speaking before surfacing results
+  #   SILENT    - ingest results into context silently without speaking immediately
+  #   INTERRUPT - immediately interrupt current speech to report the result
+  scheduling: WHEN_IDLE # WHEN_IDLE | SILENT | INTERRUPT | null
+
+  # Inject Gemini 3.8 Live anti-sweeping and tool-retry rules into the system
+  # instruction so the model reports empty/error results before retrying and
+  # never issues more than two consecutive tool calls without speaking.
+  enforce_retry_policy_in_system_instruction: true
+
   # Tools are frozen at session setup - there is no mid-session tool-update
   # message in the public Live API. Whatever is selected here is what the
   # model carries, and re-billed, for every single turn of the session.

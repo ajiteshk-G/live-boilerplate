@@ -1,6 +1,6 @@
 # Gemini Live — Enterprise Bidirectional Voice Assistant Boilerplate (Vertex AI)
 
-A production-ready, config-driven **Gemini Live API** voice agent built on **Google Cloud Vertex AI** (`gemini-live-2.5-flash-native-audio`), featuring:
+A production-ready, config-driven **Gemini Live API** voice agent built on **Google Cloud Vertex AI** (`gemini-3.8-live`), featuring:
 
 1. **Agent Identity & Strict Gender Consistency (`agent.name` & `agent.gender`)** — Prevents mixing male and female voices or grammatical verb forms across all 30 prebuilt Gemini voices and 70 languages (including gendered Indian languages like Hindi, Hinglish, Marathi, Gujarati, Punjabi, and Urdu).
 2. **Default Indian Accent with Dynamic Language Switching** — Opens in Indian English (`en-IN`) or the browser's locale (`use_client_locale: true`), dynamically switches language mid-conversation (`language_mode: follow_user`) as soon as the user does, and preserves a warm Indian vocal accent (`default_accent: Indian`) across every language.
@@ -38,7 +38,7 @@ flowchart LR
     end
 
     subgraph GCP["Google Cloud Platform (Vertex AI & Cloud Run)"]
-        LiveAPI["Vertex AI Gemini Live API\n(gemini-live-2.5-flash-native-audio)"]
+        LiveAPI["Vertex AI Gemini Live API\n(gemini-3.8-live)"]
         MCP["Cloud Run MCP Tool Server\n(FastMCP streamable_http)"]
     end
 
@@ -118,7 +118,7 @@ uv run glive voices
 
 ```yaml
 model:
-  name: gemini-live-2.5-flash-native-audio
+  name: gemini-3.8-live
   response_modalities: ["AUDIO"]
   talk_only_about: "Enterprise customer CRM accounts, loan EMI financial calculations, IT support tickets, and cloud platform service health"
 ```

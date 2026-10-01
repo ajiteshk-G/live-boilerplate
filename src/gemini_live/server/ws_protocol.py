@@ -51,8 +51,18 @@ async def apply_client_message(payload: dict[str, Any], runner: _RunnerLike) -> 
     kind = payload.get("type")
     if kind == "text" and payload.get("text"):
         await runner.uplink.text(str(payload["text"]))
+    elif kind == "client_content" and payload.get("text"):
+        await runner.uplink.client_content(
+            str(payload["text"]),
+            role=str(payload.get("role") or "user"),
+            turn_complete=bool(payload.get("turn_complete", True)),
+        )
     elif kind == "mic" and payload.get("on") is False:
         await runner.uplink.mic_off()
+    elif kind == "activity_start":
+        await runner.uplink.activity_start()
+    elif kind == "activity_end":
+        await runner.uplink.activity_end()
     elif kind == "end_call":
         # Stop means stop: end the Live session rather than just muting, so the
         # model stops generating and the session stops being billed.

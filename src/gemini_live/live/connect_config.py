@@ -15,13 +15,32 @@ from ..settings.schema import AppConfig, normalize_domain
 from ..settings.voices import agent_identity_directive, language_directive
 from ..tools.registry import ToolRegistry
 
+TOOL_RETRY_DIRECTIVE = (
+    "TOOL CALL & RETRY POLICY: When a tool returns no results or an error, "
+    "tell the user the result before calling the tool again with adjusted "
+    "parameters, and ask if they would like to try a different option. "
+    "Do not sweep through alternative parameter values automatically unless "
+    "the user explicitly asks you to check multiple options. "
+    "Hard cap: Never issue more than two consecutive function calls without "
+    "saying something back to the user."
+)
+
 
 def build_system_instruction(cfg: AppConfig, policy: DomainPolicy) -> str:
+    """Assemble the system instruction following the Gemini 3.8 Live best-practice order:
+    1. Persona & Agent Identity
+    2. Conversational & Tool Retry / Anti-Sweeping Rules
+    3. Topic, Language, and Domain Guardrails
+    """
     text = cfg.model.system_instruction.strip()
     if cfg.agent.enforce_in_system_instruction and (
         "agent" in cfg.model_fields_set or cfg.speech.language_code is not None
     ):
         text = f"{text}\n{agent_identity_directive(cfg.agent.name, cfg.agent.gender)}"
+    if cfg.tools.enforce_retry_policy_in_system_instruction and (
+        "tools" in cfg.model_fields_set or cfg.speech.language_code is not None
+    ):
+        text = f"{text}\n{TOOL_RETRY_DIRECTIVE}"
     if cfg.model.talk_only_about and cfg.model.talk_only_about.strip():
         topic = cfg.model.talk_only_about.strip()
         text = (
@@ -91,9 +110,17 @@ def build_live_config(
 
     # --- transcription -----------------------------------------------------
     if cfg.transcription.input:
-        kwargs["input_audio_transcription"] = types.AudioTranscriptionConfig()
+        in_tx_kwargs: dict[str, Any] = {}
+        if cfg.transcription.language_codes:
+            in_tx_kwargs["language_codes"] = list(cfg.transcription.language_codes)
+        if cfg.transcription.custom_vocabulary:
+            in_tx_kwargs["custom_vocabulary"] = list(cfg.transcription.custom_vocabulary)
+        kwargs["input_audio_transcription"] = types.AudioTranscriptionConfig(**in_tx_kwargs)
     if cfg.transcription.output:
-        kwargs["output_audio_transcription"] = types.AudioTranscriptionConfig()
+        out_tx_kwargs: dict[str, Any] = {}
+        if cfg.transcription.language_codes:
+            out_tx_kwargs["language_codes"] = list(cfg.transcription.language_codes)
+        kwargs["output_audio_transcription"] = types.AudioTranscriptionConfig(**out_tx_kwargs)
 
     # --- voice activity detection -----------------------------------------
     detection: dict[str, Any] = {"disabled": not cfg.vad.enabled}
@@ -109,6 +136,8 @@ def build_live_config(
     kwargs["realtime_input_config"] = types.RealtimeInputConfig(
         automatic_activity_detection=types.AutomaticActivityDetection(**detection)
     )
+    if cfg.vad.explicit_vad_signal:
+        kwargs["explicit_vad_signal"] = True
 
     # --- thinking ----------------------------------------------------------
     thinking: dict[str, Any] = {}
@@ -139,14 +168,25 @@ def build_live_config(
             ),
         )
     if cfg.session.resumption.enabled:
-        kwargs["session_resumption"] = types.SessionResumptionConfig(handle=resumption_handle)
+        res_kwargs: dict[str, Any] = {"handle": resumption_handle}
+        if cfg.session.resumption.transparent:
+            res_kwargs["transparent"] = True
+        kwargs["session_resumption"] = types.SessionResumptionConfig(**res_kwargs)
+    if cfg.session.initial_history_in_client_content:
+        kwargs["history_config"] = types.HistoryConfig(
+            initial_history_in_client_content=True
+        )
 
     # --- media -------------------------------------------------------------
     if cfg.media.resolution:
         kwargs["media_resolution"] = types.MediaResolution(cfg.media.resolution)
 
     # --- tools -------------------------------------------------------------
-    tools: list[Any] = list(registry.declarations()) if registry else []
+    caps = capabilities_for(cfg.model.name)
+    tool_behavior = cfg.tools.behavior or caps.default_tool_behavior
+    tools: list[Any] = (
+        list(registry.declarations(behavior=tool_behavior)) if registry else []
+    )
     if cfg.search.google_search.enabled:
         search_kwargs: dict[str, Any] = {}
         excluded = list(

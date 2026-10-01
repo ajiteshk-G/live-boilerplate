@@ -51,6 +51,7 @@ class Msg:
     tool_call_cancellation: Any = None
     session_resumption_update: Any = None
     go_away: Any = None
+    interaction_status: Any = None
 
 
 @dataclass
@@ -75,6 +76,7 @@ class FakeSession:
     def __init__(self, messages: list[Msg]) -> None:
         self._messages = messages
         self.realtime_inputs: list[dict[str, Any]] = []
+        self.client_contents: list[dict[str, Any]] = []
         self.tool_responses: list[Any] = []
         self.on_exhausted: Any = None
 
@@ -86,6 +88,9 @@ class FakeSession:
 
     async def send_realtime_input(self, **kwargs: Any) -> None:
         self.realtime_inputs.append(kwargs)
+
+    async def send_client_content(self, **kwargs: Any) -> None:
+        self.client_contents.append(kwargs)
 
     async def send_tool_response(self, *, function_responses: list[Any]) -> None:
         self.tool_responses.extend(function_responses)
@@ -649,3 +654,71 @@ async def test_reconnect_backoff_follows_configured_bounds(monkeypatch):
     assert delays == [0.5, 1.0, 2.0, 2.0]
 
 
+async def test_interaction_status_events_and_idle_turn_commit():
+    """Gemini 3.8 Live Extended Thinking uses interaction_status ('IN_PROGRESS' -> 'IDLE')
+    to signal when background reasoning and async tool calls are complete."""
+    runner, sink, _ = make_runner(
+        [
+            Msg(
+                interaction_status="IN_PROGRESS",
+                usage_metadata=FakeUsage(prompt_token_count=300, total_token_count=350),
+            ),
+            Msg(interaction_status="IDLE"),
+        ]
+    )
+    await runner.run()
+
+    assert runner.interaction_status == "IDLE"
+    assert sink.of_kind("interaction_status") == [
+        {"status": "IN_PROGRESS"},
+        {"status": "IDLE"},
+    ]
+    turns = sink.of_kind("usage_turn")
+    assert len(turns) == 1
+    assert turns[0]["scalars"]["total"] == 350
+
+
+async def test_transparent_resumption_captures_last_consumed_client_message_index():
+    runner, _, _ = make_runner(
+        [
+            Msg(
+                session_resumption_update=SimpleNamespace(
+                    resumable=True,
+                    new_handle="handle-t1",
+                    last_consumed_client_message_index=7,
+                )
+            )
+        ]
+    )
+    await runner.run()
+
+    assert runner._resume_handle == "handle-t1"
+    assert runner.last_consumed_client_message_index == 7
+
+
+async def test_duplicate_inflight_tool_calls_in_same_batch_are_deduplicated():
+    invocations = 0
+
+    async def create_ticket(args):
+        nonlocal invocations
+        invocations += 1
+        return {"ticket_id": "TKT-9001"}
+
+    runner, sink, session = make_runner(
+        [
+            Msg(
+                tool_call=SimpleNamespace(
+                    function_calls=[
+                        FnCall("crm__ticket", {"customer": "CUST-1001"}, "c-1"),
+                        FnCall("crm__ticket", {"customer": "CUST-1001"}, "c-2"),
+                    ]
+                )
+            )
+        ],
+        tools=[tool("crm__ticket", create_ticket)],
+    )
+    await runner.run()
+
+    assert invocations == 1
+    assert len(session.tool_responses) == 2
+    assert sink.of_kind("tool_duplicate_skipped") == [{"names": ["crm__ticket"]}]

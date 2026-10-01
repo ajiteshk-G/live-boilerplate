@@ -72,7 +72,7 @@ def _default_modalities() -> list[ResponseModality]:
 
 
 class ModelSection(_Base):
-    name: str = "gemini-live-2.5-flash-native-audio"
+    name: str = "gemini-3.8-live"
     response_modalities: list[ResponseModality] = Field(default_factory=_default_modalities)
     system_instruction: str = "You are a helpful, concise voice assistant."
     talk_only_about: str | None = None
@@ -153,6 +153,21 @@ class SpeechSection(_Base):
 class TranscriptionSection(_Base):
     input: bool = True
     output: bool = True
+    language_codes: list[str] = Field(default_factory=list)
+    """Optional BCP-47 language codes (e.g. ['en-IN', 'hi-IN']) passed to
+    AudioTranscriptionConfig to improve transcription accuracy on Gemini 3.8 Live."""
+    custom_vocabulary: list[str] = Field(default_factory=list)
+    """Domain-specific terms, product names, or acronyms (up to 1,000 entries)
+    passed to input_audio_transcription.custom_vocabulary on Gemini 3.8 Live."""
+
+    @field_validator("custom_vocabulary")
+    @classmethod
+    def _cap_custom_vocabulary(cls, v: list[str]) -> list[str]:
+        if len(v) > 1000:
+            raise ValueError(
+                "transcription.custom_vocabulary cannot exceed the API limit of 1000 entries"
+            )
+        return v
 
 
 class VadSection(_Base):
@@ -161,6 +176,8 @@ class VadSection(_Base):
     end_sensitivity: str = "END_SENSITIVITY_LOW"
     prefix_padding_ms: int | None = 20
     silence_duration_ms: int | None = 400
+    explicit_vad_signal: bool = False
+    """Subscribe to explicit server-side VAD signals (SOS/EOS) via explicit_vad_signal."""
 
 
 class ThinkingSection(_Base):
@@ -177,6 +194,9 @@ class CompressionSection(_Base):
 
 class ResumptionSection(_Base):
     enabled: bool = True
+    transparent: bool = True
+    """Enable transparent session resumption so the server reports
+    last_consumed_client_message_index for lossless replay on reconnect."""
 
 
 class ReconnectSection(_Base):
@@ -199,6 +219,9 @@ class SessionSection(_Base):
     context_window_compression: CompressionSection = CompressionSection()
     resumption: ResumptionSection = ResumptionSection()
     reconnect: ReconnectSection = ReconnectSection()
+    initial_history_in_client_content: bool = False
+    """Set HistoryConfig(initial_history_in_client_content=True) when seeding
+    prior conversation history via send_client_content at session start."""
 
 
 class MediaSection(_Base):
@@ -291,6 +314,15 @@ class BuiltinToolConfig(_Base):
 
 
 class ToolsSection(_Base):
+    behavior: Literal["NON_BLOCKING", "BLOCKING"] | None = None
+    """Function declaration execution behavior for Gemini 3.8+ Live models.
+    When None, defaults to 'NON_BLOCKING' on Gemini 3.8 Live models."""
+    scheduling: Literal["WHEN_IDLE", "SILENT", "INTERRUPT"] | None = None
+    """Scheduling policy for asynchronous (NON_BLOCKING) FunctionResponse payloads:
+    WHEN_IDLE (wait until model finishes speaking), SILENT (ingest into context
+    without speaking), or INTERRUPT (immediately interrupt current speech)."""
+    enforce_retry_policy_in_system_instruction: bool = True
+    """Inject Gemini 3.8 Live anti-sweeping and tool-retry rules into the system instruction."""
     curation: CurationSection = CurationSection()
     pinned: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=list)

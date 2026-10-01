@@ -136,7 +136,7 @@ _SERVICES: dict[str, dict[str, Any]] = {
         "primary_region": "us-central1 (Iowa)",
         "p99_latency_ms": 85,
         "uptime_30d_percent": 99.99,
-        "notes": "Gemini Live 2.5 Flash native audio routing active.",
+        "notes": "Gemini 3.8 Live native audio routing active.",
     },
 }
 
@@ -159,12 +159,17 @@ def _format_inr(amount: float) -> str:
 def lookup_customer_account(query: str) -> dict[str, Any]:
     """Look up an enterprise customer account by customer ID, name, company, or email.
 
+    **Invocation Condition:** Invoke this tool ONLY when the user asks to look up,
+    verify, or list customer CRM accounts, contract values, CSM owners, or open tickets.
+
     Examples of queries: 'CUST-1001', 'Rajesh Sharma', 'IndTech', 'priya@bharatcloud.in',
     or 'list all' to list all customers.
     """
     q = (query or "").strip().lower()
     if not q or q in ("all", "list", "list all"):
         return {
+            "status": "ok",
+            "retryable": False,
             "count": len(_CUSTOMERS),
             "customers": [
                 {
@@ -189,16 +194,21 @@ def lookup_customer_account(query: str) -> dict[str, Any]:
     ]
     if not matches:
         return {
+            "status": "no_results",
+            "retryable": False,
             "found": False,
             "query": query,
+            "valid_options": [c["customer_id"] for c in _CUSTOMERS],
             "message": (
-                "No matching customer found. Try 'Rajesh', 'Priya', 'Arjun', "
-                "'Ananya', or 'CUST-1001'."
+                f"No customer matching '{query}' exists in the CRM database. "
+                "Report this result to the user before calling the tool again. "
+                "Valid customer IDs are CUST-1001 (Rajesh Sharma), CUST-1002 (Priya Nair), "
+                "CUST-1003 (Arjun Mehta), and CUST-1004 (Ananya Iyer)."
             ),
         }
     customer = dict(matches[0])
     customer["annual_contract_formatted"] = _format_inr(customer["annual_contract_inr"])
-    return {"found": True, "customer": customer}
+    return {"status": "ok", "retryable": False, "found": True, "customer": customer}
 
 
 @mcp.tool()
@@ -209,13 +219,23 @@ def calculate_loan_emi(
 ) -> dict[str, Any]:
     """Calculate monthly loan EMI, total interest, and repayment summary in Indian Rupees.
 
+    **Invocation Condition:** Invoke this tool ONLY after the user has specified or
+    confirmed the loan principal amount, interest rate, and repayment tenure.
+
     Args:
         principal_inr: Loan principal amount in INR (e.g. 2500000 for 25 Lakhs).
         annual_interest_rate_percent: Annual interest rate as a percentage (e.g. 8.5).
         tenure_months: Total repayment tenure in months (e.g. 60 for 5 years).
     """
     if principal_inr <= 0 or tenure_months <= 0:
-        return {"error": "principal_inr and tenure_months must be positive numbers"}
+        return {
+            "status": "invalid_argument",
+            "retryable": False,
+            "error": (
+                "principal_inr and tenure_months must be positive numbers. "
+                "Ask the user for valid positive loan parameters before retrying."
+            ),
+        }
 
     monthly_rate = (annual_interest_rate_percent / 100.0) / 12.0
     if monthly_rate == 0:
@@ -228,6 +248,8 @@ def calculate_loan_emi(
     total_interest = total_payment - principal_inr
 
     return {
+        "status": "ok",
+        "retryable": False,
         "principal_formatted": _format_inr(principal_inr),
         "annual_interest_rate_percent": annual_interest_rate_percent,
         "tenure_months": tenure_months,
@@ -249,6 +271,9 @@ def create_support_ticket(
 ) -> dict[str, Any]:
     """Create a new support ticket for a customer account and return the ticket ID and SLA.
 
+    **Invocation Condition:** Invoke this tool ONLY when the user explicitly asks to
+    file, open, or create a support ticket for a customer issue.
+
     Args:
         customer_id_or_name: Customer ID (e.g. CUST-1001) or customer name.
         issue_summary: Brief description of the issue reported by the user.
@@ -267,6 +292,8 @@ def create_support_ticket(
     sla = sla_map.get(prio, "4 business hours")
 
     ticket = {
+        "status_code": "ok",
+        "retryable": False,
         "ticket_id": ticket_id,
         "customer": customer_id_or_name,
         "summary": issue_summary,
@@ -299,6 +326,9 @@ def create_support_ticket(
 def get_platform_service_status(service_name: str = "all") -> dict[str, Any]:
     """Check real-time operational health and latency of cloud platform microservices.
 
+    **Invocation Condition:** Invoke this tool when the user asks about platform
+    status, service health, uptime, or microservice latency.
+
     Args:
         service_name: Specific service ('voice-gateway', 'payments-upi',
             'kyc-verifier', 'llm-router') or 'all' for full status board.
@@ -307,6 +337,8 @@ def get_platform_service_status(service_name: str = "all") -> dict[str, Any]:
     if key in ("all", "", "*"):
         degraded = [s["service"] for s in _SERVICES.values() if s["status"] != "operational"]
         return {
+            "status": "ok",
+            "retryable": False,
             "overall_status": "degraded" if degraded else "operational",
             "degraded_services": degraded,
             "checked_at": datetime.now(UTC).isoformat(),
@@ -315,12 +347,18 @@ def get_platform_service_status(service_name: str = "all") -> dict[str, Any]:
 
     for name, info in _SERVICES.items():
         if key in name:
-            return {"found": True, **info}
+            return {"found": True, "retryable": False, **info}
 
     return {
+        "status": "no_results",
+        "retryable": False,
         "found": False,
         "requested": service_name,
         "available_services": list(_SERVICES.keys()),
+        "message": (
+            f"Service '{service_name}' does not exist. Do not retry with guessed names; "
+            f"choose from available_services: {', '.join(_SERVICES.keys())}."
+        ),
     }
 
 

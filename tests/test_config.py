@@ -138,6 +138,16 @@ def test_max_tools_above_the_api_cap_is_rejected():
         )
 
 
+def test_custom_vocabulary_above_the_api_cap_is_rejected():
+    with pytest.raises(ValueError, match="1000"):
+        AppConfig.model_validate(
+            {
+                "vertex": {"project": "p"},
+                "transcription": {"custom_vocabulary": [f"term-{i}" for i in range(1001)]},
+            }
+        )
+
+
 def test_stdio_server_requires_a_command():
     with pytest.raises(ValueError, match="requires 'command'"):
         AppConfig.model_validate(
@@ -219,6 +229,8 @@ def test_redact_masks_credentials():
 @pytest.mark.parametrize(
     ("model", "style"),
     [
+        ("gemini-3.8-live", None),
+        ("gemini-3.8-live-extended-thinking", "level"),
         ("gemini-3-pro-preview", "level"),
         ("gemini-live-2.5-flash-native-audio", "budget"),
         ("gemini-2.5-flash", "budget"),
@@ -226,6 +238,44 @@ def test_redact_masks_credentials():
 )
 def test_thinking_style_by_model_family(model, style):
     assert capabilities_for(model).thinking_style == style
+
+
+def test_default_model_is_gemini_3_8_live():
+    cfg = AppConfig.model_validate({"vertex": {"project": "p"}})
+    assert cfg.model.name == "gemini-3.8-live"
+
+
+def test_gemini_3_8_live_drops_thinking_config_with_warning():
+    cfg = AppConfig.model_validate(
+        {
+            "vertex": {"project": "p"},
+            "model": {"name": "gemini-3.8-live"},
+            "speech": {"language_code": None},
+            "thinking": {"level": "low"},
+        }
+    )
+    filtered, warnings = filter_for_model(cfg)
+
+    assert filtered.thinking.level is None
+    assert len(warnings) == 1
+    assert "does not support thinking config" in warnings[0]
+
+
+def test_gemini_3_8_live_extended_thinking_coerces_minimal_and_blocking():
+    cfg = AppConfig.model_validate(
+        {
+            "vertex": {"project": "p"},
+            "model": {"name": "gemini-3.8-live-extended-thinking"},
+            "speech": {"language_code": None},
+            "thinking": {"level": "minimal"},
+            "tools": {"behavior": "BLOCKING"},
+        }
+    )
+    filtered, warnings = filter_for_model(cfg)
+
+    assert filtered.thinking.level == "low"
+    assert filtered.tools.behavior == "NON_BLOCKING"
+    assert len(warnings) == 2
 
 
 def test_incompatible_thinking_field_is_dropped_with_a_warning():

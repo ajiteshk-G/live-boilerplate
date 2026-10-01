@@ -43,9 +43,10 @@ _PERMANENT_MARKERS = (
     "was not found",
     "not found for api version",
     # Capability mismatches: e.g. "Text output is not supported for native audio
-    # output model". The config is wrong for this model and always will be.
+    # output model" or "Unsupported modality for Vertex Live API".
     "is not supported",
     "not supported for",
+    "unsupported modality",
     "billing",
     "quota exceeded",
     "403",
@@ -91,8 +92,30 @@ class _Uplink:
     async def text(self, text: str) -> None:
         await self.queue.put({"kind": "text", "text": text})
 
+    async def client_content(
+        self,
+        text: str,
+        *,
+        role: str = "user",
+        turn_complete: bool = True,
+    ) -> None:
+        await self.queue.put(
+            {
+                "kind": "client_content",
+                "text": text,
+                "role": role,
+                "turn_complete": turn_complete,
+            }
+        )
+
     async def mic_off(self) -> None:
         await self.queue.put({"kind": "audio_stream_end"})
+
+    async def activity_start(self) -> None:
+        await self.queue.put({"kind": "activity_start"})
+
+    async def activity_end(self) -> None:
+        await self.queue.put({"kind": "activity_end"})
 
     async def close(self) -> None:
         await self.queue.put({"kind": "close"})
@@ -164,10 +187,13 @@ class LiveSessionRunner:
         self.uplink = _Uplink(asyncio.Queue())
         self._session: Any | None = None
         self._resume_handle: str | None = None
+        self._last_consumed_client_message_index: int | None = None
         self._closed = False
         self._received_any = False
         self._pending_tools: set[str] = set()
+        self._inflight_tool_signatures: dict[str, tuple[str, str]] = {}
         self._tool_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._interaction_status: str | None = None
 
         # Per-turn latency tracking (synced with gemini-live-telemetry)
         self._setup_latency_ms: float | None = None
@@ -295,17 +321,47 @@ class LiveSessionRunner:
                     audio=types.Blob(data=msg["data"], mime_type=INPUT_MIME)
                 )
             elif kind == "text":
-                # send_realtime_input for live input; send_client_content is only
-                # for seeding initial history.
+                # send_realtime_input for live streaming user text input.
                 now = time.monotonic()
                 self._last_user_input_ts = now
                 mark_session_input_timestamp(session, now)
                 await session.send_realtime_input(text=msg["text"])
+            elif kind == "client_content":
+                # Full-session client content updates with explicit role (user | model)
+                # supported across the session lifecycle on Gemini 3.8 Live models.
+                now = time.monotonic()
+                self._last_user_input_ts = now
+                mark_session_input_timestamp(session, now)
+                role = str(msg.get("role") or "user")
+                turn_complete = bool(msg.get("turn_complete", True))
+                send_fn = getattr(session, "send_client_content", None)
+                if send_fn is not None:
+                    await send_fn(
+                        turns=types.Content(
+                            role=role,
+                            parts=[types.Part(text=str(msg.get("text", "")))],
+                        ),
+                        turn_complete=turn_complete,
+                    )
             elif kind == "audio_stream_end":
                 now = time.monotonic()
                 self._last_user_input_ts = now
                 mark_session_input_timestamp(session, now)
                 await session.send_realtime_input(audio_stream_end=True)
+            elif kind == "activity_start":
+                now = time.monotonic()
+                self._last_user_input_ts = now
+                mark_session_input_timestamp(session, now)
+                await session.send_realtime_input(
+                    activity_start=types.ActivityStart()
+                )
+            elif kind == "activity_end":
+                now = time.monotonic()
+                self._last_user_input_ts = now
+                mark_session_input_timestamp(session, now)
+                await session.send_realtime_input(
+                    activity_end=types.ActivityEnd()
+                )
 
     # -------------------------------------------------------------- downlink
 
@@ -352,20 +408,66 @@ class LiveSessionRunner:
             ids = [str(i) for i in (getattr(cancellation, "ids", None) or [])]
             self._pending_tools.difference_update(ids)
             for cid in ids:
+                self._inflight_tool_signatures.pop(cid, None)
                 t = self._tool_tasks.pop(cid, None)
                 if t is not None and not t.done():
                     t.cancel()
             await self._sink.event("tool_cancelled", {"ids": ids})
 
         update = getattr(message, "session_resumption_update", None)
-        if update is not None and getattr(update, "resumable", False):
-            self._resume_handle = getattr(update, "new_handle", None)
+        if update is not None:
+            last_idx = getattr(update, "last_consumed_client_message_index", None)
+            if last_idx is not None:
+                self._last_consumed_client_message_index = int(last_idx)
+            if getattr(update, "resumable", False):
+                self._resume_handle = getattr(update, "new_handle", None)
 
         go_away = getattr(message, "go_away", None)
         if go_away is not None:
             await self._sink.event(
                 "go_away", {"time_left": str(getattr(go_away, "time_left", ""))}
             )
+
+        voice_activity = getattr(message, "voice_activity", None)
+        vad_signal = getattr(message, "voice_activity_detection_signal", None)
+        if voice_activity is not None or vad_signal is not None:
+            va_type = (
+                getattr(voice_activity, "voice_activity_type", None)
+                if voice_activity is not None
+                else None
+            )
+            sig_type = (
+                getattr(vad_signal, "vad_signal_type", None)
+                if vad_signal is not None
+                else None
+            )
+            await self._sink.event(
+                "voice_activity",
+                {
+                    "voice_activity_type": (
+                        str(getattr(va_type, "value", va_type))
+                        if va_type is not None
+                        else None
+                    ),
+                    "vad_signal_type": (
+                        str(getattr(sig_type, "value", sig_type))
+                        if sig_type is not None
+                        else None
+                    ),
+                },
+            )
+
+        # Gemini 3.8 Live Extended Thinking emits interaction_status ("IN_PROGRESS" | "IDLE")
+        # to signal whether background reasoning / async tools have completed.
+        interaction_status = getattr(message, "interaction_status", None) or getattr(
+            message, "interactionStatus", None
+        )
+        if interaction_status is not None:
+            status_val = str(getattr(interaction_status, "value", interaction_status))
+            self._interaction_status = status_val
+            await self._sink.event("interaction_status", {"status": status_val})
+            if status_val == "IDLE" and self._accountant.has_inflight:
+                await self._finalize_turn()
 
     def _mark_first_model_byte(self) -> None:
         if self._turn_first_byte_ts is None:
@@ -421,30 +523,83 @@ class LiveSessionRunner:
     # ------------------------------------------------------------------ tools
 
     async def _handle_tool_call(self, tool_call: Any) -> None:
+        import json
+
         calls = list(getattr(tool_call, "function_calls", None) or [])
         if not calls:
             return
         self._mark_first_model_byte()
-        names = [getattr(c, "name", "?") for c in calls]
-        call_ids = [str(getattr(c, "id", "")) for c in calls if getattr(c, "id", None)]
+
+        # Deduplicate identical in-flight asynchronous tool calls (Gemini 3.8 Live
+        # best practice: when a user repeats a request while a NON_BLOCKING tool is
+        # still running, prevent duplicate execution while acknowledging the call ID).
+        active_sigs = set(self._inflight_tool_signatures.values())
+        unique_calls: list[Any] = []
+        duplicate_calls: list[Any] = []
+        batch_sigs: dict[str, tuple[str, str]] = {}
+
+        for c in calls:
+            cname = str(getattr(c, "name", "?") or "?")
+            cargs = dict(getattr(c, "args", None) or {})
+            cid = str(getattr(c, "id", "") or "")
+            sig = (cname, json.dumps(cargs, sort_keys=True, default=str))
+            if sig in active_sigs or sig in batch_sigs.values():
+                duplicate_calls.append(c)
+            else:
+                unique_calls.append(c)
+                if cid:
+                    batch_sigs[cid] = sig
+
+        if duplicate_calls and self._session is not None:
+            from google.genai import types
+
+            dup_responses = [
+                types.FunctionResponse(
+                    id=getattr(dc, "id", None),
+                    name=str(getattr(dc, "name", "?") or "?"),
+                    response={
+                        "status": "duplicate_in_flight",
+                        "retryable": False,
+                        "message": (
+                            f"Tool '{getattr(dc, 'name', '?')}' with identical arguments "
+                            "is already executing in flight. Wait for its result."
+                        ),
+                    },
+                )
+                for dc in duplicate_calls
+            ]
+            await self._session.send_tool_response(function_responses=dup_responses)
+            await self._sink.event(
+                "tool_duplicate_skipped",
+                {"names": [getattr(dc, "name", "?") for dc in duplicate_calls]},
+            )
+
+        if not unique_calls:
+            return
+
+        names = [getattr(c, "name", "?") for c in unique_calls]
+        call_ids = [
+            str(getattr(c, "id", "")) for c in unique_calls if getattr(c, "id", None)
+        ]
         call_details = [
             {
                 "id": str(getattr(c, "id", "") or ""),
                 "name": getattr(c, "name", "?"),
                 "args": dict(getattr(c, "args", None) or {}),
             }
-            for c in calls
+            for c in unique_calls
         ]
         for cd in call_details:
             log.info("Tool call -> %s(%s)", cd["name"], cd["args"])
 
         self._pending_tools.update(call_ids)
+        self._inflight_tool_signatures.update(batch_sigs)
         await self._sink.event(
             "tool_call",
             {"names": names, "calls": call_details},
         )
 
-        task = asyncio.create_task(self._execute_tool_calls(calls, names, call_ids))
+        task = asyncio.create_task(self._execute_tool_calls(unique_calls, names, call_ids))
         for cid in call_ids or ["_anon"]:
             self._tool_tasks[cid] = task
 
@@ -505,6 +660,7 @@ class LiveSessionRunner:
             raise
         finally:
             for cid in call_ids or ["_anon"]:
+                self._inflight_tool_signatures.pop(cid, None)
                 self._tool_tasks.pop(cid, None)
 
     async def _wait_tool_tasks(self) -> None:
@@ -514,6 +670,7 @@ class LiveSessionRunner:
 
     def _cancel_tool_tasks(self) -> None:
         self._pending_tools.clear()
+        self._inflight_tool_signatures.clear()
         for t in set(self._tool_tasks.values()):
             if not t.done():
                 t.cancel()
@@ -587,6 +744,14 @@ class LiveSessionRunner:
     @property
     def cost_model(self) -> CostModel:
         return self._cost
+
+    @property
+    def interaction_status(self) -> str | None:
+        return self._interaction_status
+
+    @property
+    def last_consumed_client_message_index(self) -> int | None:
+        return self._last_consumed_client_message_index
 
     async def close(self) -> None:
         self._closed = True

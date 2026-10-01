@@ -104,7 +104,9 @@ class ToolPipeline:
             selection.catalog_tokens,
         )
         return ToolPipelineResult(
-            registry=ToolRegistry.from_selection(selection),
+            registry=ToolRegistry.from_selection(
+                selection, scheduling=cfg.tools.scheduling
+            ),
             selection=selection,
             catalog=catalog,
             mcp_failures=failures,

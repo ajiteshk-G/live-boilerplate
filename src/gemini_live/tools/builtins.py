@@ -34,7 +34,9 @@ async def _get_current_time(args: dict[str, Any]) -> dict[str, Any]:
 _BUILTINS: dict[str, dict[str, Any]] = {
     "get_current_time": {
         "description": (
-            "Get the current date and time (defaults to UTC, or specify an IANA timezone)."
+            "Get the current date and time (defaults to UTC, or specify an IANA timezone). "
+            "Invocation Condition: Invoke this tool when the user asks for the current "
+            "time, date, or day of the week."
         ),
         "schema": {
             "type": "object",
