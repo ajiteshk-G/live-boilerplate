@@ -291,15 +291,20 @@ def language_directive(
         (default_accent or "").strip().lower() == "indian" or region == "IN"
     )
     accent_line = (
-        "DEFAULT ACCENT AND VOCAL TONE: Always speak with a natural, warm Indian accent "
-        "and Indian conversational cadence/tone as your default vocal persona across all "
-        "languages you speak (including English, Hindi, Hinglish, and any regional or "
-        "international language). Indian names, places, and number formats (lakhs/crores) "
-        "must sound native."
+        "DEFAULT ACCENT AND VOCAL TONE: SPEAK WITH AN INDIAN ACCENT. "
+        "YOU MUST SPEAK UNMISTAKABLY WITH A NATURAL, WARM INDIAN ACCENT "
+        "AND INDIAN CONVERSATIONAL CADENCE AS YOUR DEFAULT VOCAL PERSONA ACROSS ALL "
+        "LANGUAGES YOU SPEAK (INCLUDING ENGLISH, HINDI, HINGLISH, AND ANY REGIONAL OR "
+        "INTERNATIONAL LANGUAGE). Speak with a natural, warm Indian accent so Indian "
+        "names, places, and number formats (lakhs/crores) sound native."
     )
 
     if follow_user:
         lines = [
+            (
+                f"RESPOND IN {label.upper()} BY DEFAULT. YOU MUST RESPOND UNMISTAKABLY "
+                f"IN {label.upper()} UNLESS THE USER SPEAKS ANOTHER LANGUAGE."
+            ),
             f"Open the conversation in {label}.",
             "SPEAK THE USER'S LANGUAGE: identify the language the user is speaking "
             "and reply in that same language. If they switch language mid-conversation, "

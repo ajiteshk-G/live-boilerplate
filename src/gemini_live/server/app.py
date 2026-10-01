@@ -18,6 +18,7 @@ from ..live.runner import INPUT_SAMPLE_RATE, OUTPUT_SAMPLE_RATE, LiveSessionRunn
 from ..pipeline import ToolPipeline, ToolPipelineResult
 from ..settings.capabilities import filter_for_model
 from ..settings.schema import AppConfig, redact
+from ..settings.voices import LIVE_VOICES, VOICE_GENDERS
 from ..telemetry import activate_telemetry, get_telemetry_snapshot
 from .ws_protocol import apply_client_message, decode_client_message, encode_event
 
@@ -111,6 +112,14 @@ def create_app(cfg: AppConfig) -> FastAPI:
             "config": redact(cfg),
             "warnings": warnings,
             "telemetry": get_telemetry_snapshot(cfg),
+            "voices": [
+                {
+                    "name": name,
+                    "gender": VOICE_GENDERS.get(name, "female"),
+                    "character": character,
+                }
+                for name, character in LIVE_VOICES.items()
+            ],
             "tools": {
                 "selected": [
                     {
@@ -153,14 +162,20 @@ def create_app(cfg: AppConfig) -> FastAPI:
             return
 
         sink = _WebSocketSink(ws)
-        # The browser reports navigator.language; open the session in that
-        # language when it is one the Live API supports.
-        session_cfg = cfg.for_client_locale(ws.query_params.get("locale"))
+        # Apply per-session locale, voice, and topic overrides requested by the UI.
+        session_cfg = cfg.for_session_params(
+            locale=ws.query_params.get("locale"),
+            voice=ws.query_params.get("voice"),
+            topic=ws.query_params.get("topic"),
+        )
         if session_cfg is not cfg:
             log.info(
-                "client locale %r: opening in %s",
-                ws.query_params.get("locale"),
+                "session params: voice=%s (%s, %s), language=%s, topic=%r",
+                session_cfg.speech.voice_name,
+                session_cfg.agent.name,
+                session_cfg.agent.gender,
                 session_cfg.speech.language_code,
+                session_cfg.model.talk_only_about,
             )
         # Build a fresh client per session so a long-running server picks up
         # refreshed Application Default Credentials rather than holding an

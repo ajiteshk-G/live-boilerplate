@@ -57,6 +57,72 @@ h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
 #call-btn:disabled, #mic-btn:disabled { background: var(--line); color: var(--muted); cursor: not-allowed; }
 #call-btn.live, #mic-btn.live { background: var(--bad); color: #fff; }
 
+/* ----------------------------------------------------------- call-config */
+.call-config-bar {
+  display: grid;
+  grid-template-columns: minmax(320px, 2.2fr) minmax(260px, 1fr);
+  gap: 16px;
+  padding: 12px 24px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  align-items: end;
+}
+@media (max-width: 900px) { .call-config-bar { grid-template-columns: 1fr; } }
+
+.config-field { display: flex; flex-direction: column; gap: 5px; }
+.config-field label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.config-field input,
+.config-field select {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 11px;
+  font: inherit;
+  outline: none;
+  transition: border-color .15s;
+}
+.config-field input:focus,
+.config-field select:focus {
+  border-color: var(--accent);
+}
+.config-field input:disabled,
+.config-field select:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.persona-badge {
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: .02em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #14243a;
+  color: var(--accent);
+  border: 1px solid #223859;
+}
+.call-param-badge {
+  font-size: 11px;
+  color: var(--accent);
+  background: #14243a;
+  border: 1px solid #223859;
+  border-radius: 999px;
+  padding: 2px 9px;
+  max-width: 68%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.call-param-badge:empty { display: none; }
+
 /* ----------------------------------------------------------------- layout */
 main {
   display: grid;

@@ -103,7 +103,7 @@ def test_follow_user_mode_tells_the_model_to_switch_with_the_user():
     assert "switch with them immediately" in text
     # The pinning wording would contradict switching, so it must be absent.
     assert "Speak only English (India)" not in text
-    assert "UNMISTAKABLY" not in text
+    assert "UNMISTAKABLY" in text
 
 
 def test_follow_user_is_the_default_mode():
@@ -123,20 +123,19 @@ def test_language_directive_only_claims_an_accent_for_indian_locales():
 def test_no_directive_when_language_code_is_null():
     cfg = make_cfg(speech={"language_code": None})
     text = build_system_instruction(cfg, DomainPolicy())
-    assert "ENGLISH (INDIA)" not in text
+    assert "RESPOND IN ENGLISH (INDIA)" not in text
     assert "SPEAK THE USER'S LANGUAGE" not in text
 
 
-def test_gemini_3_8_live_does_not_send_speech_config_language_code():
-    """Gemini 3.8 Live ignores SpeechConfig.language_code on the wire and uses
-    the system instruction + transcription.language_codes instead."""
+def test_gemini_3_8_live_sends_speech_config_language_code_and_voice():
+    """SpeechConfig includes both voice_config and language_code per Live API best practices."""
     cfg = make_cfg(
         speech={"voice_name": "Kore", "language_code": "en-IN"},
     )
     live = build_live_config(cfg)
 
     assert live.speech_config.voice_config.prebuilt_voice_config.voice_name == "Kore"
-    assert live.speech_config.language_code is None
+    assert live.speech_config.language_code == "en-IN"
 
 
 # ------------------------------------------------------------- client locale
@@ -254,5 +253,36 @@ def test_system_instruction_enforces_agent_name_and_anti_mixing_rules():
     assert "strictly MALE" in male_prompt
     assert "DO NOT MIX MALE AND FEMALE" in male_prompt
     assert "karunga" in male_prompt
+
+
+def test_for_session_params_overrides_voice_and_topic_without_mutating_shared_cfg():
+    cfg = make_cfg(
+        agent={"name": "Ananya", "gender": "female"},
+        speech={"voice_name": "Kore", "language_code": "en-IN"},
+        model={"talk_only_about": "Default CRM Topic"},
+    )
+    session = cfg.for_session_params(
+        locale="hi-IN",
+        voice="Puck",
+        topic="IPL Cricket Commentary and Player Stats",
+    )
+
+    assert session.speech.voice_name == "Puck"
+    assert session.agent.gender == "male"
+    assert session.agent.name == "Aarav"
+    assert session.speech.language_code == "hi-IN"
+    assert session.model.talk_only_about == "IPL Cricket Commentary and Player Stats"
+
+    prompt = build_system_instruction(session, DomainPolicy())
+    assert 'Your name is "Aarav"' in prompt
+    assert 'TOPIC RESTRICTION: Talk ONLY about "IPL Cricket Commentary and Player Stats"' in prompt
+    assert "UNMISTAKABLY" in prompt
+
+    # Shared config remains untouched
+    assert cfg.speech.voice_name == "Kore"
+    assert cfg.agent.gender == "female"
+    assert cfg.agent.name == "Ananya"
+    assert cfg.model.talk_only_about == "Default CRM Topic"
+
 
 

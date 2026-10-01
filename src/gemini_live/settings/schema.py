@@ -74,7 +74,12 @@ def _default_modalities() -> list[ResponseModality]:
 class ModelSection(_Base):
     name: str = "gemini-3.8-live"
     response_modalities: list[ResponseModality] = Field(default_factory=_default_modalities)
-    system_instruction: str = "You are a helpful, concise voice assistant."
+    system_instruction: str = (
+        "You are a helpful, concise voice assistant. "
+        "SPEAK WITH AN INDIAN ACCENT. YOU MUST SPEAK UNMISTAKABLY WITH A NATURAL INDIAN "
+        "ACCENT AND RESPOND UNMISTAKABLY IN ENGLISH (INDIA) BY DEFAULT UNLESS THE USER "
+        "SPEAKS ANOTHER LANGUAGE."
+    )
     talk_only_about: str | None = None
     """Optional topic restriction injected into the system instruction.
     When set, the model is instructed to ONLY discuss this topic/domain."""
@@ -476,6 +481,43 @@ class AppConfig(_Base):
             return self
         clone = self.model_copy(deep=True)
         clone.speech.language_code = resolved
+        return clone
+
+    def for_session_params(
+        self,
+        *,
+        locale: str | None = None,
+        voice: str | None = None,
+        topic: str | None = None,
+    ) -> AppConfig:
+        """Return a per-session config copy applying client locale, voice, and topic.
+
+        When ``voice`` is provided and valid, updates ``speech.voice_name`` and
+        automatically aligns ``agent.gender`` and ``agent.name`` (`Ananya` for
+        female voices, `Aarav` for male voices) so male and female personas are
+        never mixed.
+        When ``topic`` is provided (not None), updates ``model.talk_only_about``
+        (an empty string clears the topic restriction for that session).
+        """
+        base = self.for_client_locale(locale)
+        canon_voice = canonical_voice(voice) if voice and voice.strip() else None
+        has_voice_change = canon_voice is not None and canon_voice != base.speech.voice_name
+        has_topic_change = (
+            topic is not None and (topic.strip() or None) != base.model.talk_only_about
+        )
+
+        if not has_voice_change and not has_topic_change:
+            return base
+
+        clone = base.model_copy(deep=True) if base is self else base
+        if canon_voice is not None:
+            clone.speech.voice_name = canon_voice
+            v_gender = voice_gender(canon_voice)
+            if v_gender in ("female", "male"):
+                clone.agent.gender = v_gender  # type: ignore[assignment]
+                clone.agent.name = "Ananya" if v_gender == "female" else "Aarav"
+        if topic is not None:
+            clone.model.talk_only_about = topic.strip() or None
         return clone
 
 

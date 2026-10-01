@@ -231,6 +231,10 @@ class LiveSessionRunner:
                             "connected",
                             {
                                 "model": self._cfg.model.name,
+                                "voice": self._cfg.speech.voice_name,
+                                "agent_name": self._cfg.agent.name,
+                                "agent_gender": self._cfg.agent.gender,
+                                "topic": self._cfg.model.talk_only_about,
                                 "tools": self._registry.names,
                                 "resumed": self._resume_handle is not None,
                                 "language": self._cfg.speech.language_code,

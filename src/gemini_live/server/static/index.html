@@ -32,10 +32,29 @@
   </div>
 </header>
 
+<section class="call-config-bar" aria-label="Call parameters">
+  <div class="config-field config-topic">
+    <label for="topic-input">Bound Conversation Topic <span class="muted">(talk_only_about · Indian Accent enforced)</span></label>
+    <input
+      id="topic-input"
+      type="text"
+      placeholder="Enter topic to bind the conversation to (leave blank for open conversation)…"
+      autocomplete="off"
+    >
+  </div>
+  <div class="config-field config-voice">
+    <label for="voice-select">Voice &amp; Persona <span id="voice-persona-badge" class="persona-badge">Ananya · Female</span></label>
+    <select id="voice-select" aria-label="Select Gemini Live voice"></select>
+  </div>
+</section>
+
 <main>
   <!-- conversation -->
   <section class="panel conversation">
-    <h2>Conversation</h2>
+    <div class="section-title-row">
+      <h2>Conversation</h2>
+      <span id="active-call-badge" class="call-param-badge" title="Active Topic & Voice"></span>
+    </div>
     <div id="transcript" class="transcript"></div>
     <form id="text-form" class="text-form">
       <input id="text-input" type="text" placeholder="Or type a message…" autocomplete="off">

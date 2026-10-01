@@ -387,10 +387,17 @@ function renderCitations(payload) {
 
 function connect() {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  // Tell the server what language this user is in, so the call opens in it
-  // rather than in the server's default.
-  const locale = encodeURIComponent(navigator.language || '');
-  const ws = new WebSocket(`${proto}://${window.location.host}/ws?locale=${locale}`);
+  // Tell the server what language, voice, and bound topic this user selected
+  // so the call opens with those exact session parameters.
+  const params = new URLSearchParams();
+  params.set('locale', navigator.language || '');
+  const selectedVoice = el('voice-select')?.value || state.voiceName || '';
+  if (selectedVoice) params.set('voice', selectedVoice);
+  const topicInput = el('topic-input');
+  if (topicInput) {
+    params.set('topic', topicInput.value.trim());
+  }
+  const ws = new WebSocket(`${proto}://${window.location.host}/ws?${params.toString()}`);
   ws.binaryType = 'arraybuffer';
   state.ws = ws;
   state.ended = false;
@@ -423,19 +430,33 @@ function connect() {
     const msg = JSON.parse(event.data);
     switch (msg.type) {
       case 'connected':
+        if (msg.agent_name) state.agentName = msg.agent_name;
+        if (msg.agent_gender) state.agentGender = msg.agent_gender;
+        if (msg.voice) state.voiceName = msg.voice;
+        if (msg.model) state.modelName = msg.model;
+        updateHeaderIdentity();
+        updateActiveCallBadge(msg.voice || state.voiceName, msg.topic);
         setStatus(`Live · ${msg.model}`, 'ok');
         if (msg.setup_latency_ms != null) {
           state.setupLatencyMs = msg.setup_latency_ms;
           renderLatencyDashboard();
           logEvent('telemetry', `session setup ${Math.round(msg.setup_latency_ms)} ms`);
         }
-        logEvent('session', `${msg.tools.length} tool(s) available`);
+        logEvent(
+          'session',
+          `voice ${msg.voice || state.voiceName} (${msg.agent_name || state.agentName}) · ${msg.tools.length} tool(s)`
+        );
+        if (msg.topic) {
+          logEvent('topic', `bound to "${msg.topic}"`);
+        } else {
+          logEvent('topic', 'unrestricted topic');
+        }
         if (msg.language) {
           logEvent(
             'language',
             msg.language_mode === 'follow_user'
-              ? `starts in ${msg.language}, follows your language`
-              : `pinned to ${msg.language}`
+              ? `starts in ${msg.language} (Indian accent), follows your language`
+              : `pinned to ${msg.language} (Indian accent)`
           );
         }
         break;
@@ -552,10 +573,35 @@ function stopMic() {
 
 // ---------------------------------------------------------------------- call
 
+function updateHeaderIdentity() {
+  const agentName = state.agentName || 'Ananya';
+  const agentGender = state.agentGender || 'female';
+  const voiceName = state.voiceName || 'Kore';
+  const modelName = state.modelName || 'gemini-3.8-live';
+  el('model-name').textContent = `${agentName} (${agentGender} · ${voiceName}) · ${modelName}`;
+  const badge = el('voice-persona-badge');
+  if (badge) {
+    const capGender = agentGender.charAt(0).toUpperCase() + agentGender.slice(1);
+    badge.textContent = `${agentName} · ${capGender}`;
+  }
+}
+
+function updateActiveCallBadge(voice, topic) {
+  const badge = el('active-call-badge');
+  if (!badge) return;
+  const v = voice || state.voiceName || 'Kore';
+  const t = topic != null ? String(topic).trim() : (el('topic-input')?.value.trim() || '');
+  badge.textContent = t ? `🎙 ${v} · Topic: ${t}` : `🎙 ${v} · Open Topic`;
+}
+
 function setCallButton(live) {
   const btn = el('call-btn');
   btn.classList.toggle('live', live);
   btn.textContent = live ? 'Stop call' : 'Start call';
+  const topicInput = el('topic-input');
+  const voiceSelect = el('voice-select');
+  if (topicInput) topicInput.disabled = live;
+  if (voiceSelect) voiceSelect.disabled = live;
 }
 
 // The Live session starts with the socket, so the socket is opened on demand:
@@ -566,6 +612,12 @@ async function ensureConnected() {
 }
 
 async function startCall() {
+  // If a text-only socket was already open and the user now clicks Start call,
+  // reconnect if voice or topic changed, otherwise reuse or open fresh.
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.close();
+    state.ws = null;
+  }
   await ensureConnected();
   await startMic();
   state.callActive = true;
@@ -636,6 +688,71 @@ el('text-form').addEventListener('submit', async (e) => {
   input.value = '';
 });
 
+function populateVoiceSelector(voices, currentVoice) {
+  const select = el('voice-select');
+  if (!select) return;
+  const catalog = Array.isArray(voices) && voices.length
+    ? voices
+    : [{ name: currentVoice || 'Kore', gender: 'female', character: 'Firm' }];
+  state.voicesByName = Object.fromEntries(catalog.map((v) => [v.name, v]));
+
+  const femaleVoices = catalog.filter((v) => v.gender === 'female');
+  const maleVoices = catalog.filter((v) => v.gender === 'male');
+
+  const buildGroup = (label, items) => {
+    const group = document.createElement('optgroup');
+    group.label = label;
+    items.forEach((v) => {
+      const opt = document.createElement('option');
+      opt.value = v.name;
+      opt.textContent = `${v.name} — ${v.character} (${v.gender === 'female' ? 'Ananya · Female' : 'Aarav · Male'})`;
+      if (v.name === currentVoice) opt.selected = true;
+      group.appendChild(opt);
+    });
+    return group;
+  };
+
+  select.innerHTML = '';
+  if (femaleVoices.length) {
+    select.appendChild(buildGroup('Female Voices (Persona: Ananya)', femaleVoices));
+  }
+  if (maleVoices.length) {
+    select.appendChild(buildGroup('Male Voices (Persona: Aarav)', maleVoices));
+  }
+}
+
+if (el('voice-select')) {
+  el('voice-select').addEventListener('change', (e) => {
+    const chosen = e.target.value;
+    const meta = (state.voicesByName || {})[chosen];
+    state.voiceName = chosen;
+    if (meta) {
+      state.agentGender = meta.gender;
+      state.agentName = meta.gender === 'female' ? 'Ananya' : 'Aarav';
+    }
+    updateHeaderIdentity();
+    updateActiveCallBadge(chosen, el('topic-input')?.value);
+    // If a text-only session is open (not an active mic call), close it so the
+    // next message or Start call opens with the newly selected voice.
+    if (!state.callActive && state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.ws.close();
+      state.ws = null;
+    }
+  });
+}
+
+if (el('topic-input')) {
+  el('topic-input').addEventListener('input', (e) => {
+    updateActiveCallBadge(state.voiceName, e.target.value);
+  });
+  el('topic-input').addEventListener('change', () => {
+    if (!state.callActive && state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.ws.close();
+      state.ws = null;
+    }
+  });
+}
+
 function applyTelemetrySnapshot(t) {
   if (!t) return;
   if (t.dashboard_url && el('gcp-dashboard-link')) {
@@ -687,11 +804,19 @@ async function loadMeta() {
     if (data.telemetry) {
       applyTelemetrySnapshot(data.telemetry);
     }
-    const agentName = data.config.agent?.name || 'Ananya';
-    const agentGender = data.config.agent?.gender || 'female';
-    const voiceName = data.config.speech?.voice_name || 'Kore';
-    state.agentName = agentName;
-    el('model-name').textContent = `${agentName} (${agentGender} · ${voiceName}) · ${data.config.model.name}`;
+    state.agentName = data.config.agent?.name || 'Ananya';
+    state.agentGender = data.config.agent?.gender || 'female';
+    state.voiceName = data.config.speech?.voice_name || 'Kore';
+    state.modelName = data.config.model?.name || 'gemini-3.8-live';
+
+    populateVoiceSelector(data.voices, state.voiceName);
+    const topicInput = el('topic-input');
+    if (topicInput && !topicInput.value) {
+      topicInput.value = data.config.model?.talk_only_about || '';
+    }
+    updateHeaderIdentity();
+    updateActiveCallBadge(state.voiceName, topicInput?.value || '');
+
     el('tool-count').textContent =
       `${data.tools.selected.length} of ${data.tools.catalog_size}`;
     el('tool-tokens').textContent = `${fmt(data.tools.tokens_per_turn)} tokens/turn`;

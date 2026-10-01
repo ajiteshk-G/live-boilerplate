@@ -94,13 +94,16 @@ def build_live_config(
 
     # --- voice -------------------------------------------------------------
     if cfg.speech.voice_name:
-        kwargs["speech_config"] = types.SpeechConfig(
-            voice_config=types.VoiceConfig(
+        speech_kwargs: dict[str, Any] = {
+            "voice_config": types.VoiceConfig(
                 prebuilt_voice_config=types.PrebuiltVoiceConfig(
                     voice_name=cfg.speech.voice_name
                 )
             )
-        )
+        }
+        if cfg.speech.language_code:
+            speech_kwargs["language_code"] = cfg.speech.language_code
+        kwargs["speech_config"] = types.SpeechConfig(**speech_kwargs)
 
     # --- transcription -----------------------------------------------------
     if cfg.transcription.input:
